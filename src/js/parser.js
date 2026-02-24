@@ -210,6 +210,7 @@ var codeMirrorFn = function() {
     const reg_sounddirectionindicators = /^(up|down|left|right|horizontal|vertical|orthogonal)\b/i;
 
     const keyword_array = [ 'checkpoint', 'objects', 'collisionlayers', 'legend', 'sounds', 'rules', 'winconditions', 'levels',
+        'layer',
         '|', '[', ']', 'up', 'down', 'left', 'right', 'late', 'rigid', '^', 'v', '>', '<', 'no', 'randomdir', 'random', 'horizontal', 'vertical',
         'any', 'all', 'no', 'some', 'moving', 'stationary', 'parallel', 'perpendicular', 'action', 'message', 'move', 
         'create', 'destroy', 'cantmove', 'sfx0', 'sfx1', 'sfx2', 'sfx3', 'Sfx4', 'sfx5', 'sfx6', 'sfx7', 'sfx8', 'sfx9', 'sfx10', 
@@ -1743,6 +1744,7 @@ var codeMirrorFn = function() {
     //  line ::= MESSAGE <text>
     //         | SECTION <text>
     //         | GOTO <text>
+    //         | LAYER
     //         | ( <levelchar>+ [ WS comment ] )+
     function parseLevel(stream, state) {
         const lexer = new Lexer(stream, state);
@@ -1759,7 +1761,7 @@ var codeMirrorFn = function() {
         function getTokens() {
             let token
             // start of parse
-            if (token = lexer.match(/^(goto|level|link|message|section|title|input)/i, true)) { // allow omision of whitespace (with no warning!)
+            if (token = lexer.match(/^(goto|level|link|message|section|title|input|layer)/i, true)) { // allow omision of whitespace (with no warning!)
                 symbols.start = token;
                 lexer.pushToken(token, `${errorCase(token)}_VERB`);
 
@@ -1808,7 +1810,7 @@ var codeMirrorFn = function() {
                 state.levels.pop();
                 toplevel = null;
             }
-            const cmds = [ 'goto', 'level', 'link', 'message', 'section', 'title', 'input' ];
+            const cmds = [ 'goto', 'level', 'link', 'message', 'section', 'title', 'input', 'layer' ];
             if (cmds.includes(symbols.start))
                 state.levels.push([ symbols.start, symbols.text, state.lineNumber, symbols.link ]);
             else {

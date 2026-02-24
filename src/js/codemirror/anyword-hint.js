@@ -310,10 +310,12 @@
                     }
                 case 'levels':
                     {
-                        if ("message".indexOf(lineToCursor.trim())===0) {
+                        const t = lineToCursor.trim().toLowerCase();
+                        if ("message".indexOf(t)===0 || "section".indexOf(t)===0 || "goto".indexOf(t)===0 || "layer".indexOf(t)===0) {
                             candlists.push(["MESSAGE_VERB","message"]);
                             candlists.push(["SECTION_VERB","section"]);
                             candlists.push(["GOTO_VERB"   ,"goto"   ]);
+                            candlists.push(["LAYER_VERB"  ,"layer"  ]);
                         }
                         break;
                     }

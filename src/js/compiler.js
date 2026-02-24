@@ -964,6 +964,54 @@ function levelsToArray(state) {
     //const links = {};
     //const targets = new Set();
     let section, title, description, gotoFlag, input;
+    let expectLayerGrid = false;
+    let expectLayerLine = null;
+    const layerObjectIds = state.collisionLayers.map(layer => layer.map(name => state.objects[name].id));
+
+    const isGridLevel = level => level instanceof Level;
+
+    function getObjectOnLayer(cell, layerIndex) {
+        for (const id of layerObjectIds[layerIndex]) {
+            if (cell.get(id))
+                return id;
+        }
+        return -1;
+    }
+
+    function mergeLevelLayer(baseLevel, overlayLevel, lineNumber) {
+        if (baseLevel.width !== overlayLevel.width || baseLevel.height !== overlayLevel.height) {
+            logError(`LAYER map size mismatch. Expected ${baseLevel.width}x${baseLevel.height}, got ${overlayLevel.width}x${overlayLevel.height}.`, lineNumber);
+            return false;
+        }
+
+        for (let i = 0; i < baseLevel.n_tiles; i++) {
+            const baseCell = baseLevel.getCell(i);
+            const overlayCell = overlayLevel.getCell(i);
+
+            for (let layerIndex = 0; layerIndex < state.layerMasks.length; layerIndex++) {
+                const baseId = getObjectOnLayer(baseCell, layerIndex);
+                const overlayId = getObjectOnLayer(overlayCell, layerIndex);
+                if (overlayId === -1 || overlayId === baseId)
+                    continue;
+
+                // Treat background from overlay as transparent for layering.
+                if (overlayId === state.backgroundid && baseId !== -1 && baseId !== state.backgroundid)
+                    continue;
+
+                if (baseId !== -1 && baseId !== state.backgroundid && overlayId !== state.backgroundid) {
+                    const baseName = errorCase(state.idDict[baseId]);
+                    const overlayName = errorCase(state.idDict[overlayId]);
+                    logError(`LAYER conflict at map cell ${i + 1}: "${overlayName}" overlaps "${baseName}" on the same collision layer.`, lineNumber);
+                    return false;
+                }
+
+                baseCell.iclear(state.layerMasks[layerIndex]);
+                baseCell.ibitset(overlayId);
+            }
+            baseLevel.setCell(i, baseCell);
+        }
+        return true;
+    }
     
     if (state.levels.at(-1).length == 0)
         state.levels.pop();
@@ -973,6 +1021,11 @@ function levelsToArray(state) {
     // parse: state.levels.push([ symbols.start, symbols.text, state.lineNumber, symbols.link ]);
     state.levels.forEach(level => {
         title ||= `Level ${levelNo}`;
+        if (typeof level[0] === 'string' && level[0] !== 'layer' && expectLayerGrid) {
+            logError('LAYER must be followed immediately by map rows.', level[2]);
+            expectLayerGrid = false;
+            expectLayerLine = null;
+        }
 		if (level[0] == 'message') {
             if (gotoFlag) logWarning('Message unreachable due to previous GOTO.', level[2]);
             const wrapTest = wordwrap(level[1], 35);  // todo: 35
@@ -1007,18 +1060,46 @@ function levelsToArray(state) {
             });
 		} else if (level[0] == 'input') {
             input = level[1];
+		} else if (level[0] == 'layer') {
+            if (level[1] && level[1].trim().length > 0)
+                logWarning(`LAYER does not take text, so "${level[1].trim()}" is ignored.`, level[2]);
+            if (expectLayerGrid) {
+                logError('LAYER cannot appear twice in a row without map rows in between.', level[2]);
+            } else if (!isGridLevel(levels.at(-1))) {
+                logError('LAYER must follow a map in the LEVELS section.', level[2]);
+            } else {
+                expectLayerGrid = true;
+                expectLayerLine = level[2];
+            }
 		} else {
             if (gotoFlag && links.length == 0) 
                 logWarning('Level unreachable due to previous GOTO.', level[0]);
             level[1] = section; // todo: fix it
-			levels.push(levelFromString(state, level));
-            levels.at(-1).title = title;
-            levels.at(-1).linksTop = links.length;
-            if (input) levels.at(-1).input = input;
-            ++levelNo;
-            title = null;
+            const compiledLevel = levelFromString(state, level);
+            if (expectLayerGrid && isGridLevel(levels.at(-1))) {
+                if (!mergeLevelLayer(levels.at(-1), compiledLevel, level[0])) {
+                    levels.push(compiledLevel);
+                    levels.at(-1).title = title;
+                    levels.at(-1).linksTop = links.length;
+                    if (input) levels.at(-1).input = input;
+                    ++levelNo;
+                    title = null;
+                }
+                expectLayerGrid = false;
+                expectLayerLine = null;
+            } else {
+			    levels.push(compiledLevel);
+                levels.at(-1).title = title;
+                levels.at(-1).linksTop = links.length;
+                if (input) levels.at(-1).input = input;
+                ++levelNo;
+                title = null;
+            }
 		}
 	});
+    if (expectLayerGrid) {
+        logError('LAYER must be followed by another map block.', expectLayerLine);
+    }
     links.forEach(link => {
         let index = -9999;
         if ((index = levels.findIndex(level => link.target == level.section)) != -1)

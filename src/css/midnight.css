@@ -58,6 +58,7 @@
 .cm-s-midnight span.cm-SECTION_VERB {color: rgb(129, 255, 156);font-weight:bold;}
 .cm-s-midnight span.cm-SECTION {color: orange;font-style:italic;}
 .cm-s-midnight span.cm-GOTO_VERB {color: #AE81FF;font-weight:bold;}
+.cm-s-midnight span.cm-LAYER_VERB {color: #AE81FF;font-weight:bold;}
 .cm-s-midnight span.cm-GOTO {color: orange;font-style:italic;}
 .cm-s-midnight span.cm-METADATA {color: #AE81FF;font-weight:bold;}
 .cm-s-midnight span.cm-METADATATEXT {color: orange;font-style:italic;}
