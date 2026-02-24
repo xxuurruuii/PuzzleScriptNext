@@ -1,44 +1,50 @@
-title PuzzleScriptNext Starter
-author davidus
-homepage www.polyomino.com
-
-// Welcome to PuzzleScript Next, the home of the most advanced PuzzleScript features!
-
-// This is the starting point for advanced users who love PuzzleScript and want more!
-// It shows a few of the many new features added to the original PuzzleScript, building 
-// on the work of PuzzleScript Plus, Pattern:Script and others.
-
-// See how you can use // comments instead of () if you prefer, or you can mix them.
-
-// For more information, don't forget to check out the fully merged documentation, 
-// the examples in the dropdown and the gallery.
-
-// This program can be found in next/starter.txt.
-
-tween_length 0.03
-smoothscreen 5x5
-level_select
-runtime_metadata_twiddling
-text_controls Don't forget to try the Examples\nand the Action key and Escape for Level Select!
+title Simple Block Pushing Game
+homepage www.puzzlescript.net
+(This is a demo showing how "layer" work in level data.)
 
 ========
 OBJECTS
 ========
 
-Background 
-LIGHTGRAY GRAY
+Background
+lightgreen green
+11111
+01111
+11101
+11111
+10111
+
+Target
+darkblue
+.....
+.000.
+.0.0.
+.000.
+.....
+
+Wall
+brown darkbrown
 00010
 11111
 01000
 11111
 00010
 
-Wall copy:Background
-DARKGRAY BLACK
+Player
+black orange white blue
+.000.
+.111.
+22222
+.333.
+.3.3.
 
-Target; #0f0
-Player; #00f8
-Crate; orange
+Crate
+orange
+00000
+0...0
+0...0
+0...0
+00000
 
 =======
 LEGEND
@@ -48,14 +54,13 @@ LEGEND
 # = Wall
 P = Player
 * = Crate
-@ = Crate and Target
 O = Target
 
 =======
 SOUNDS
 =======
 
-player cantmove 85101706
+Crate move 36772507
 
 ================
 COLLISIONLAYERS
@@ -69,8 +74,7 @@ Player, Wall, Crate
 RULES
 ======
 
-[ >  Player | Crate ] -> [  >  Player | > Crate  ]
-[action Player] -> background_color #ff4400ff
+[ > Player | Crate ] -> [ > Player | > Crate ] 
 
 ==============
 WINCONDITIONS
@@ -82,29 +86,46 @@ all Target on Crate
 LEVELS
 =======
 
-section Level 1
-#########
-#.......#
-#.....@.#
-#.P.*.O.#
-#.......#
-#.......#
-#########
+section level 1
 
-section Level 2
-#########
-#.......#
-#..o....#
-#.o...*.#
-#....*p##
-#.....###
-#########
+####..
+#.O#..
+#..##.
+#O....
+#..*..
+#..##.
+####..
+layer
+.###..
+..O#..
+...###
+.*...#
+...*.#
+...###
+.###..
+layer
+......
+......
+......
+..P...
+......
+......
+......
 
-section Level 3
-#########
-#.......#
-##..o.#.#
-#.*.p.*.#
-#.#.o.#.#
-#.......#
-#########
+section level 2
+
+######
+#....#
+#.#P.#
+#..O.#
+#.OO.#
+#....#
+######
+layer
+######
+#....#
+#.#P.#
+#.**.#
+#..*.#
+#....#
+######
