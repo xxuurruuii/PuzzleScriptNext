@@ -152,9 +152,9 @@ function matchGlyph(inputmask,glyphAndMask) {
 	var highestbitcount=-1;
 	var highestmask;
 	for (var i=0; i<glyphAndMask.length; ++i) {
-		var glyphname = glyphAndMask[i][0];
-		var glyphmask = glyphAndMask[i][1];
- 		var glyphbits = glyphAndMask[i][2];
+		var glyphname = glyphAndMask[i].name;
+		var glyphmask = glyphAndMask[i].matchMask;
+ 		var glyphbits = glyphAndMask[i].fullMask;
 		//require all bits of glyph to be in input
 		if (glyphmask.bitsSetInArray(inputmask.data)) {
 			var bitcount = 0;
@@ -191,40 +191,148 @@ var selectableint  = 0;
 
 function printLevel() {
 	var glyphMasks = [];
+	var glyphByMask = {};
+	var backgroundMask = state.layerMasks[state.backgroundlayer];
+	var backgroundOnly = new BitVec(STRIDE_OBJ);
+	backgroundOnly.ibitset(state.backgroundid);
+	var backgroundOnlyKey = bitVecKey(backgroundOnly);
+	var backgroundGlyph = '.';
+	var warnedApprox = false;
+	var warnedNoBackgroundGlyph = false;
+
+	function bitVecKey(vec) {
+		return Array.from(vec.data).join(',');
+	}
+
+	function bitCount(vec) {
+		var c = 0;
+		for (var bit = 0; bit < 32 * STRIDE_OBJ; ++bit) {
+			if (vec.get(bit))
+				c++;
+		}
+		return c;
+	}
+
+	function chooseBestGlyphForResidual(residual) {
+		var best = null;
+		for (var i = 0; i < glyphMasks.length; ++i) {
+			var glyph = glyphMasks[i];
+			if (glyph.contributionCount <= 0)
+				continue;
+			if (glyph.contributionMask.bitsSetInArray(residual.data)) {
+				if (best == null || glyph.contributionCount > best.contributionCount)
+					best = glyph;
+			}
+		}
+		return best;
+	}
+
+	function decomposeCell(cellMask) {
+		var exact = glyphByMask[bitVecKey(cellMask)];
+		if (exact !== undefined)
+			return [ exact ];
+
+		var residual = cellMask.clone();
+		residual.ibitclear(state.backgroundid);
+		var parts = [];
+		while (!residual.iszero()) {
+			var best = chooseBestGlyphForResidual(residual);
+			if (best == null)
+				break;
+			parts.push(best.name);
+			residual.iclear(best.contributionMask);
+		}
+
+		if (!residual.iszero()) {
+			if (!warnedApprox) {
+				consolePrint('Level export warning: some cells cannot be represented exactly by available single-character glyphs.', true);
+				warnedApprox = true;
+			}
+			return [ matchGlyph(cellMask, glyphMasks) ];
+		}
+		if (parts.length == 0)
+			return [ matchGlyph(cellMask, glyphMasks) ];
+		return parts;
+	}
+
 	for (var glyphName in state.glyphDict) {
 		if (state.glyphDict.hasOwnProperty(glyphName)&&glyphName.length===1) {
 			var glyph = state.glyphDict[glyphName];
-			var glyphmask=new BitVec(STRIDE_OBJ);
+			var fullMask = new BitVec(STRIDE_OBJ);
 			for (var i=0;i<glyph.length;i++)
 			{
 				var id = glyph[i];
 				if (id>=0) {
-					glyphmask.ibitset(id);
+					fullMask.ibitset(id);
 				}
 			}
-			var glyphbits = glyphmask.clone();
-			//register the same - backgroundmask with the same name
-			var bgMask = state.layerMasks[state.backgroundlayer];
-			glyphmask.iclear(bgMask);
-			glyphMasks.push([glyphName, glyphmask, glyphbits]);
+			var matchMask = fullMask.clone();
+			matchMask.iclear(backgroundMask);
+			var contributionMask = fullMask.clone();
+			contributionMask.ibitclear(state.backgroundid);
+			var glyphInfo = {
+				name: glyphName,
+				matchMask: matchMask,
+				fullMask: fullMask,
+				contributionMask: contributionMask,
+				contributionCount: bitCount(contributionMask)
+			};
+			glyphMasks.push(glyphInfo);
+
+			var fullKey = bitVecKey(fullMask);
+			if (glyphByMask[fullKey] === undefined)
+				glyphByMask[fullKey] = glyphName;
+			if (fullKey === backgroundOnlyKey)
+				backgroundGlyph = glyphName;
 		}
 	}
+
+	if (glyphByMask[backgroundOnlyKey] === undefined) {
+		for (var g = 0; g < glyphMasks.length; g++) {
+			if (glyphMasks[g].contributionCount === 0) {
+				backgroundGlyph = glyphMasks[g].name;
+				break;
+			}
+		}
+		if (backgroundGlyph === '.' && !warnedNoBackgroundGlyph) {
+			consolePrint('Level export warning: no explicit background glyph found; using "." as layer filler.', true);
+			warnedNoBackgroundGlyph = true;
+		}
+	}
+
+	var perCellLayers = [];
+	var maxLayerCount = 1;
+	for (var y = 0; y < curLevel.height; y++) {
+		for (var x = 0; x < curLevel.width; x++) {
+			var cellIndex = y + x * curLevel.height;
+			var cellMask = curLevel.getCell(cellIndex);
+			var parts = decomposeCell(cellMask);
+			perCellLayers[cellIndex] = parts;
+			if (parts.length > maxLayerCount)
+				maxLayerCount = parts.length;
+		}
+	}
+
 	selectableint++;
 	var tag = 'selectable'+selectableint;
 	var output="Printing level contents:<br><br><span id=\""+tag+"\" onclick=\"selectText('"+tag+"',event)\"><br>";
 	cache_console_messages = false;
-	for (var j=0;j<curLevel.height;j++) {
-		for (var i=0;i<curLevel.width;i++) {
-			var cellIndex = j+i*curLevel.height;
-			var cellMask = curLevel.getCell(cellIndex);
-			var glyph = matchGlyph(cellMask,glyphMasks);
-			if (glyph in htmlEntityMap) {
-				glyph = htmlEntityMap[glyph]; 
+	for (var layerIndex = 0; layerIndex < maxLayerCount; layerIndex++) {
+		for (var j=0;j<curLevel.height;j++) {
+			for (var i=0;i<curLevel.width;i++) {
+				var cIndex = j + i * curLevel.height;
+				var glyph = perCellLayers[cIndex][layerIndex] || backgroundGlyph;
+				if (glyph in htmlEntityMap) {
+					glyph = htmlEntityMap[glyph]; 
+				}
+				output = output + glyph;
 			}
-			output = output+glyph;
+			if (j < curLevel.height - 1 || layerIndex < maxLayerCount - 1) {
+				output = output + "<br>";
+			}
 		}
-		if (j<curLevel.height-1){
-			output=output+"<br>";
+		if (layerIndex < maxLayerCount - 1) {
+			output = output + "layer<br>";
 		}
 	}
 	output+="</span><br><br>"
@@ -245,32 +353,32 @@ function levelEditorClick(event,click) {
 	} else if (mouseCoordX>-1&&mouseCoordY>-1&&mouseCoordX<screenwidth-2&&mouseCoordY<screenheight-2-editorRowCount	) {
 		var glyphname = glyphImagesCorrespondance[glyphSelectedIndex];
 		var glyph = state.glyphDict[glyphname];
-		var glyphmask = new BitVec(STRIDE_OBJ);
-		for (var i=0;i<glyph.length;i++)
-		{
-			var id = glyph[i];
-			if (id>=0) {
-				glyphmask.ibitset(id);
-			}			
-		}
-
 		var backgroundMask = state.layerMasks[state.backgroundlayer];
-		if (glyphmask.bitsClearInArray(backgroundMask.data)) {
-			// If we don't already have a background layer, mix in
-			// the default one.
-			glyphmask.ibitset(state.backgroundid);
-		}
 
 		var coordIndex = mouseCoordY + mouseCoordX*curLevel.height;
-		var getcell = curLevel.getCell(coordIndex);
-		if (getcell.equals(glyphmask)) {
+		var oldCell = curLevel.getCell(coordIndex);
+		var newCell = oldCell.clone();
+		for (var layerIndex = 0; layerIndex < glyph.length; layerIndex++) {
+			var id = glyph[layerIndex];
+			if (id >= 0) {
+				newCell.iclear(state.layerMasks[layerIndex]);
+				newCell.ibitset(id);
+			}
+		}
+		if (newCell.bitsClearInArray(backgroundMask.data)) {
+			// If we don't already have a background layer, mix in
+			// the default one.
+			newCell.ibitset(state.backgroundid);
+		}
+
+		if (oldCell.equals(newCell)) {
 			return;
 		} else {
 			if (anyEditsSinceMouseDown===false) {
 				anyEditsSinceMouseDown=true;				
         		backups.push(backupLevel());
 			}
-			curLevel.setCell(coordIndex, glyphmask);
+			curLevel.setCell(coordIndex, newCell);
 			redraw();
 		}
 	}
