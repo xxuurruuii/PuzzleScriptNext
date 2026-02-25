@@ -150,23 +150,23 @@ function init3DRenderer() {
     // === THREE-POINT LIGHTING SYSTEM ===
 
     // Ambient light - very low, just to prevent pure black shadows
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene3d.add(ambientLight);
 
-    // KEY LIGHT - Main light, warm color, casts shadows
+    // KEY LIGHT - Main parallel light, warm color, casts shadows
     // Positioned front-right, above the scene
-    keyLight = new THREE.SpotLight(0xffeedd);  // Warm white
-    keyLight.angle = Math.PI / 4;  // Cone angle (45 degrees)
-    keyLight.penumbra = 0.5;  // Soft edge falloff
-    keyLight.decay = 0.5;  // Light decay with distance
+    keyLight = new THREE.DirectionalLight(0xffeedd, 1.0);  // Warm white
     keyLight.castShadow = true;
 
-    // Shadow settings for spot light
+    // Shadow settings for directional light
     keyLight.shadow.mapSize.width = 2048;
     keyLight.shadow.mapSize.height = 2048;
-    keyLight.shadow.camera.near = 100;
-    keyLight.shadow.camera.far = 200;
-    keyLight.shadow.camera.fov = 50;
+    keyLight.shadow.camera.near = 0.5;
+    keyLight.shadow.camera.far = 500;
+    keyLight.shadow.camera.left = -100;
+    keyLight.shadow.camera.right = 100;
+    keyLight.shadow.camera.top = 100;
+    keyLight.shadow.camera.bottom = -100;
 
     // VSM-specific: radius controls shadow softness (blur)
     keyLight.shadow.radius = 8;  // Soft shadow blur radius
@@ -1184,15 +1184,19 @@ function redraw3D() {
     if (keyLight) {
         const shadowSize = Math.max(visibleWidth, visibleHeight) * state.sprite_size * 0.7;
 
-        // SpotLight uses perspective shadow camera - update far plane and distance
-        keyLight.shadow.camera.near = shadowSize * 2.5 * SPRITE_HEIGHT;
-        keyLight.shadow.camera.far = shadowSize * 15 * SPRITE_HEIGHT;
+        // DirectionalLight uses orthographic shadow camera - update coverage bounds
+        keyLight.shadow.camera.near = 0.5;
+        keyLight.shadow.camera.far = shadowSize * 12 * SPRITE_HEIGHT;
+        keyLight.shadow.camera.left = -shadowSize;
+        keyLight.shadow.camera.right = shadowSize;
+        keyLight.shadow.camera.top = shadowSize;
+        keyLight.shadow.camera.bottom = -shadowSize;
         keyLight.shadow.camera.updateProjectionMatrix();
 
         // Position key light relative to level center (front-right-above)
         keyLight.position.set(shadowSize * 0.8, shadowSize * 3 * SPRITE_HEIGHT, shadowSize * 0.6);
         keyLight.target.position.set(0, 0, 0);
-        keyLight.power = 10 * Math.pow(shadowSize, 0.5);  // Scale power with shadow area for consistent brightness
+        keyLight.intensity = 1.5;
 
         // Update fill light position (front-left)
         if (fillLight) {
