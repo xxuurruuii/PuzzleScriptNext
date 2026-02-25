@@ -1196,11 +1196,11 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
             if (!spriteGlassMaterials[spriteIndex]) {
                 spriteGlassMaterials[spriteIndex] = new THREE.MeshPhysicalMaterial({
                     vertexColors: true,
-                    roughness: 0.3,
+                    roughness: 0.0,
                     metalness: 0.0,
                     transmission: transmission,
-                    thickness: 10 * SPRITE_HEIGHT,
-                    ior: 1.5,
+                    thickness: 0.0,
+                    ior: 1.0,
                     transparent: true,
                     side: THREE.DoubleSide,
                 });
@@ -1433,31 +1433,34 @@ function redraw3D() {
             let lastGroupIndex = -1;
 
             for (let k = 0; k < state.objectCount; k++) {
-                if (posMask.get(k) != 0 && getOrCreateSpriteGeometry(k)) {
-                    // Check if this object moved here
-                    const movementKey = `${posIndex}_${k}`;
-                    let animFrom = null;
+                if (posMask.get(k) == 0) continue;
 
-                    if (movementMap[movementKey]) {
-                        const m = movementMap[movementKey];
-                        // Convert from absolute coords to visible-area relative coords
-                        animFrom = {
-                            gridX: m.fromX - mini,
-                            gridY: m.fromY - minj
-                        };
-                    }
-
-                    // When there are multiple collision layer groups, use them for layering.
-                    const groupIndex = getCollisionGroupIndex(k);
-                    if (state.collisionLayerGroups.length <= 1 || groupIndex !== lastGroupIndex) {
-                        height += 1;
-                    } else {
-                        height += 0.1;
-                    }
-                    lastGroupIndex = groupIndex;
-
-                    createSprite3D(k, i - mini, j - minj, height, visibleWidth, visibleHeight, animFrom);
+                // Always reserve height for present objects, including fully transparent ones.
+                const groupIndex = getCollisionGroupIndex(k);
+                if (state.collisionLayerGroups.length <= 1 || groupIndex !== lastGroupIndex) {
+                    height += 1;
+                } else {
+                    height += 0.0;
                 }
+                lastGroupIndex = groupIndex;
+
+                const hasGeometry = !!getOrCreateSpriteGeometry(k);
+                if (!hasGeometry) continue;
+
+                // Check if this object moved here
+                const movementKey = `${posIndex}_${k}`;
+                let animFrom = null;
+
+                if (movementMap[movementKey]) {
+                    const m = movementMap[movementKey];
+                    // Convert from absolute coords to visible-area relative coords
+                    animFrom = {
+                        gridX: m.fromX - mini,
+                        gridY: m.fromY - minj
+                    };
+                }
+
+                createSprite3D(k, i - mini, j - minj, height, visibleWidth, visibleHeight, animFrom);
             }
         }
     }
