@@ -213,6 +213,15 @@ function printLevel() {
 		return c;
 	}
 
+	function overlapCount(a, b) {
+		var c = 0;
+		for (var bit = 0; bit < 32 * STRIDE_OBJ; ++bit) {
+			if (a.get(bit) && b.get(bit))
+				c++;
+		}
+		return c;
+	}
+
 	function chooseBestGlyphForResidual(residual) {
 		var best = null;
 		for (var i = 0; i < glyphMasks.length; ++i) {
@@ -225,6 +234,34 @@ function printLevel() {
 			}
 		}
 		return best;
+	}
+
+	function chooseApproxGlyphForResidual(residual) {
+		var best = null;
+		var bestOverlap = 0;
+		var bestWaste = Number.MAX_SAFE_INTEGER;
+		for (var i = 0; i < glyphMasks.length; ++i) {
+			var glyph = glyphMasks[i];
+			if (glyph.contributionCount <= 0)
+				continue;
+			var overlap = overlapCount(glyph.contributionMask, residual);
+			if (overlap <= 0)
+				continue;
+			var waste = glyph.contributionCount - overlap;
+			if (best == null || overlap > bestOverlap || (overlap === bestOverlap && waste < bestWaste)) {
+				best = glyph;
+				bestOverlap = overlap;
+				bestWaste = waste;
+			}
+		}
+		return best;
+	}
+
+	function clearOverlapFromResidual(residual, mask) {
+		for (var bit = 0; bit < 32 * STRIDE_OBJ; ++bit) {
+			if (mask.get(bit) && residual.get(bit))
+				residual.ibitclear(bit);
+		}
 	}
 
 	function decomposeCell(cellMask) {
@@ -248,7 +285,15 @@ function printLevel() {
 				consolePrint('Level export warning: some cells cannot be represented exactly by available single-character glyphs.', true);
 				warnedApprox = true;
 			}
-			return [ matchGlyph(cellMask, glyphMasks) ];
+			var safety = 0;
+			while (!residual.iszero() && safety < state.objectCount) {
+				var approx = chooseApproxGlyphForResidual(residual);
+				if (approx == null)
+					break;
+				parts.push(approx.name);
+				clearOverlapFromResidual(residual, approx.contributionMask);
+				safety++;
+			}
 		}
 		if (parts.length == 0)
 			return [ matchGlyph(cellMask, glyphMasks) ];
