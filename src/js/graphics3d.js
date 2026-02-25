@@ -17,7 +17,6 @@ let spriteGeometries = {};  // spriteIndex -> THREE.BufferGeometry (merged cubes
 let spriteTransmission = {};    // spriteIndex -> minimum alpha value (1.0 = fully opaque)
 let spriteGlassMaterials = {};  // spriteIndex -> MeshPhysicalMaterial (per-sprite glass with custom transmission)
 let spriteMaterial = null;  // Shared material using vertex colors
-let clayNormalMap = null;   // Normal map texture for clay look
 
 // Instanced mesh system - one InstancedMesh per sprite type
 let instancedMeshes = {};   // spriteIndex -> THREE.InstancedMesh
@@ -62,52 +61,6 @@ const CAMERA_MAX_PITCH = 1.5;
 const CAMERA_MIN_ZOOM = 0.4;
 const CAMERA_MAX_ZOOM = 3.0;
 const CAMERA_ZOOM_STEP = 0.12;
-
-/**
- * Add per-instance UV rotation to a material using onBeforeCompile.
- * This allows each instance of an InstancedMesh to have its own UV rotation,
- * breaking up visible tiling patterns in textures/normal maps.
- */
-function addInstancedUvRotation(material) {
-    material.onBeforeCompile = (shader) => {
-        // Add the instance attribute declaration to vertex shader
-        shader.vertexShader = shader.vertexShader.replace(
-            '#include <common>',
-            `#include <common>
-            attribute float instanceUvRotation;
-            varying float vUvRotation;`
-        );
-        // Pass the rotation to fragment shader
-        shader.vertexShader = shader.vertexShader.replace(
-            '#include <uv_vertex>',
-            `#include <uv_vertex>
-            vUvRotation = instanceUvRotation;`
-        );
-        // Declare the varying in fragment shader
-        shader.fragmentShader = shader.fragmentShader.replace(
-            '#include <common>',
-            `#include <common>
-            varying float vUvRotation;`
-        );
-        // Rotate UVs before normal map lookup
-        shader.fragmentShader = shader.fragmentShader.replace(
-            '#include <normal_fragment_maps>',
-            `// Rotate UVs for normal map sampling
-            #ifdef USE_NORMALMAP
-            vec2 rotatedUv = vNormalMapUv;
-            float uvCos = cos(vUvRotation);
-            float uvSin = sin(vUvRotation);
-            rotatedUv = vec2(
-                rotatedUv.x * uvCos - rotatedUv.y * uvSin,
-                rotatedUv.x * uvSin + rotatedUv.y * uvCos
-            );
-            vec3 mapN = texture2D( normalMap, rotatedUv ).xyz * 2.0 - 1.0;
-            mapN.xy *= normalScale;
-            normal = normalize( tbn * mapN );
-            #endif`
-        );
-    };
-}
 
 /**
  * Initialize the Three.js renderer, scene, and camera
@@ -231,35 +184,12 @@ function init3DRenderer() {
     fillLight.castShadow = false;  // Fill light doesn't cast shadows
     scene3d.add(fillLight);
 
-    // Load clay normal map texture (optional - works without it for standalone export)
-    const textureLoader = new THREE.TextureLoader();
-    const NORMAL_SCALE = 0.5;  // Adjust normal map strength for subtle effect
-    clayNormalMap = textureLoader.load('images/clay_normal.jpg',
-        function(texture) {
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-            // Update material once texture is loaded
-            if (spriteMaterial) {
-                spriteMaterial.normalMap = texture;
-                spriteMaterial.normalScale = new THREE.Vector2(NORMAL_SCALE, NORMAL_SCALE);
-                spriteMaterial.needsUpdate = true;
-            }
-        },
-        undefined,  // onProgress
-        function(error) {
-            // Normal map not available (e.g., standalone export) - continue without it
-            console.log('Normal map not available, using flat shading');
-            clayNormalMap = null;
-        }
-    );
-
-    // Create shared material that uses vertex colors (normal map added when loaded)
+    // Create shared material that uses vertex colors (flat surface, no texture map).
     spriteMaterial = new THREE.MeshStandardMaterial({
         vertexColors: true,
         roughness: 0.7,
         metalness: 0.0
     });
-    addInstancedUvRotation(spriteMaterial);
 
     // Handle window resize
     window.addEventListener('resize', onWindowResize3D, false);
@@ -434,8 +364,8 @@ function isPixelFilled(spriteData, colors, px, py, width, height) {
 }
 
 /**
- * Get or create a merged geometry for a sprite (all cubes combined with vertex colors)
- * Implements rounded edges based on neighbor occupancy for claymation look
+ * Get or create a merged geometry for a sprite (all cubes combined with vertex colors).
+ * Uses hard-edged voxel cubes (no bevel/rounding on material edges).
  */
 function getOrCreateSpriteGeometry(spriteIndex) {
     if (spriteGeometries[spriteIndex]) {
@@ -453,7 +383,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     const spriteHeight = spriteData.length;
     const spriteWidth = spriteData[0] ? spriteData[0].length : 0;
 
-    // Count non-transparent pixels to pre-allocate arrays
+    // Count non-transparent pixels to pre-allocate arrays.
     let cubeCount = 0;
     for (let py = 0; py < spriteHeight; py++) {
         for (let px = 0; px < spriteWidth; px++) {
@@ -465,7 +395,7 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
     if (cubeCount === 0) return null;
 
-    // Find minimum alpha value across all colors in the sprite
+    // Find minimum alpha value across all colors in the sprite.
     let transmission = 0.0;
     for (const c of colors) {
         if (c && c !== 'transparent') {
@@ -477,7 +407,6 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     }
     spriteTransmission[spriteIndex] = transmission;
 
-    // Create merged geometry
     const positions = [];
     const normals = [];
     const vertexColors = [];
@@ -486,12 +415,8 @@ function getOrCreateSpriteGeometry(spriteIndex) {
 
     const halfSize = CUBE_SIZE / 2;
     const halfSizeVertical = SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size / 2;
-    const bevel = CUBE_SIZE * 0.25;  // Bevel size for rounding
-    const uvScale = 0.1;  // Scale factor for UV tiling
+    const uvScale = 0.1;
 
-    let vertexOffset = 0;
-
-    // Helper to add a vertex with UV based on position
     function addVertex(x, y, z, nx, ny, nz, color) {
         positions.push(x, y, z);
         normals.push(nx, ny, nz);
@@ -501,21 +426,19 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             const scale = c => c + (1 - c) * color.transmission;
             vertexColors.push(scale(color.red), scale(color.green), scale(color.blue));
         }
-        // UV coordinates: use x+y for u, z+y for v (so vertical faces get texture too)
         const u = (x + y) * uvScale;
         const v = (z + y) * uvScale;
         uvs.push(u, v);
     }
 
-    // Helper to add a triangle
-    function addTriangle(v0, v1, v2) {
-        indices.push(vertexOffset + v0, vertexOffset + v1, vertexOffset + v2);
-    }
-
-    // Helper to add a quad (two triangles)
-    function addQuad(v0, v1, v2, v3) {
-        indices.push(vertexOffset + v0, vertexOffset + v1, vertexOffset + v2);
-        indices.push(vertexOffset + v0, vertexOffset + v2, vertexOffset + v3);
+    function addFace(v0, v1, v2, v3, nx, ny, nz, color) {
+        const start = positions.length / 3;
+        addVertex(v0[0], v0[1], v0[2], nx, ny, nz, color);
+        addVertex(v1[0], v1[1], v1[2], nx, ny, nz, color);
+        addVertex(v2[0], v2[1], v2[2], nx, ny, nz, color);
+        addVertex(v3[0], v3[1], v3[2], nx, ny, nz, color);
+        indices.push(start, start + 1, start + 2);
+        indices.push(start, start + 2, start + 3);
     }
 
     for (let py = 0; py < spriteHeight; py++) {
@@ -526,287 +449,81 @@ function getOrCreateSpriteGeometry(spriteIndex) {
             const color = colors[colorIndex];
             const parsedColor = parseColorWithAlpha(color);
 
-            // Offset for this cube within the sprite
             const offsetX = px * CUBE_SIZE;
             const offsetZ = py * CUBE_SIZE;
 
-            // Check neighbors (in sprite coordinates: x=right, z=down in 3D)
             const hasLeft = isPixelFilled(spriteData, colors, px - 1, py, spriteWidth, spriteHeight);
             const hasRight = isPixelFilled(spriteData, colors, px + 1, py, spriteWidth, spriteHeight);
             const hasFront = isPixelFilled(spriteData, colors, px, py + 1, spriteWidth, spriteHeight);  // +Z
             const hasBack = isPixelFilled(spriteData, colors, px, py - 1, spriteWidth, spriteHeight);   // -Z
 
-            // Diagonal neighbors for corners
-            const hasBackLeft = isPixelFilled(spriteData, colors, px - 1, py - 1, spriteWidth, spriteHeight);
-            const hasBackRight = isPixelFilled(spriteData, colors, px + 1, py - 1, spriteWidth, spriteHeight);
-            const hasFrontLeft = isPixelFilled(spriteData, colors, px - 1, py + 1, spriteWidth, spriteHeight);
-            const hasFrontRight = isPixelFilled(spriteData, colors, px + 1, py + 1, spriteWidth, spriteHeight);
+            const x0 = -halfSize + offsetX;
+            const x1 = halfSize + offsetX;
+            const y0 = -halfSizeVertical;
+            const y1 = halfSizeVertical;
+            const z0 = -halfSize + offsetZ;
+            const z1 = halfSize + offsetZ;
 
-            // Determine corner rounding based on the rules
-            // A corner is exposed if it's at the intersection of two exposed edges
-            // or if the diagonal is empty and both adjacent edges are present
-            const cornerBackLeft = (!hasLeft && !hasBack) || (!hasBackLeft && hasLeft && hasBack);
-            const cornerBackRight = (!hasRight && !hasBack) || (!hasBackRight && hasRight && hasBack);
-            const cornerFrontLeft = (!hasLeft && !hasFront) || (!hasFrontLeft && hasLeft && hasFront);
-            const cornerFrontRight = (!hasRight && !hasFront) || (!hasFrontRight && hasRight && hasFront);
+            // Top
+            addFace(
+                [x0, y1, z0],
+                [x0, y1, z1],
+                [x1, y1, z1],
+                [x1, y1, z0],
+                0, 1, 0, parsedColor
+            );
 
-            // Edge bevels (only on exposed edges)
-            const bevelLeft = !hasLeft;
-            const bevelRight = !hasRight;
-            const bevelFront = !hasFront;
-            const bevelBack = !hasBack;
+            // Bottom
+            addFace(
+                [x0, y0, z0],
+                [x1, y0, z0],
+                [x1, y0, z1],
+                [x0, y0, z1],
+                0, -1, 0, parsedColor
+            );
 
-            // Build the voxel geometry with bevels
-            // We'll build the voxel with beveled edges:
-            // - Inner top face (inset, at full height)
-            // - Top bevel strip (angled faces from inner edge down to outer edge)
-            // - Vertical sides (outer perimeter)
-            // - Bottom bevel strip (angled faces from outer edge up to inner edge)
-            // - Inner bottom face (inset, at full depth)
-
-            // Y coordinates for the geometry
-            const innerTopY = halfSizeVertical;              // Top face stays at full height
-            const outerTopY = halfSizeVertical - bevel;      // Outer edge is lowered by bevel
-            const outerBotY = -halfSizeVertical + bevel;     // Outer bottom edge is raised by bevel
-            const innerBotY = -halfSizeVertical;             // Bottom face at full depth
-
-            // Define corner positions
-            // Back-left corner (-X, -Z)
-            let blX = -halfSize + offsetX;
-            let blZ = -halfSize + offsetZ;
-            let blBevelX = bevelLeft ? bevel : 0;
-            let blBevelZ = bevelBack ? bevel : 0;
-
-            // Back-right corner (+X, -Z)
-            let brX = halfSize + offsetX;
-            let brZ = -halfSize + offsetZ;
-            let brBevelX = bevelRight ? -bevel : 0;
-            let brBevelZ = bevelBack ? bevel : 0;
-
-            // Front-right corner (+X, +Z)
-            let frX = halfSize + offsetX;
-            let frZ = halfSize + offsetZ;
-            let frBevelX = bevelRight ? -bevel : 0;
-            let frBevelZ = bevelFront ? -bevel : 0;
-
-            // Front-left corner (-X, +Z)
-            let flX = -halfSize + offsetX;
-            let flZ = halfSize + offsetZ;
-            let flBevelX = bevelLeft ? bevel : 0;
-            let flBevelZ = bevelFront ? -bevel : 0;
-
-            // ===== BUILD INNER PERIMETER (top face outline, inset by bevel) =====
-            let innerVerts = [];
-
-            // Back-left corner
-            if (cornerBackLeft && (bevelLeft || bevelBack)) {
-                if (bevelLeft) innerVerts.push([blX + blBevelX, blZ + blBevelZ + bevel]);
-                if (bevelBack) innerVerts.push([blX + blBevelX + bevel, blZ + blBevelZ]);
-            } else {
-                innerVerts.push([blX + blBevelX, blZ + blBevelZ]);
+            if (!hasLeft) {
+                addFace(
+                    [x0, y1, z1],
+                    [x0, y1, z0],
+                    [x0, y0, z0],
+                    [x0, y0, z1],
+                    -1, 0, 0, parsedColor
+                );
             }
 
-            // Back-right corner
-            if (cornerBackRight && (bevelRight || bevelBack)) {
-                if (bevelBack) innerVerts.push([brX + brBevelX - bevel, brZ + brBevelZ]);
-                if (bevelRight) innerVerts.push([brX + brBevelX, brZ + brBevelZ + bevel]);
-            } else {
-                innerVerts.push([brX + brBevelX, brZ + brBevelZ]);
+            if (!hasRight) {
+                addFace(
+                    [x1, y1, z0],
+                    [x1, y1, z1],
+                    [x1, y0, z1],
+                    [x1, y0, z0],
+                    1, 0, 0, parsedColor
+                );
             }
 
-            // Front-right corner
-            if (cornerFrontRight && (bevelRight || bevelFront)) {
-                if (bevelRight) innerVerts.push([frX + frBevelX, frZ + frBevelZ - bevel]);
-                if (bevelFront) innerVerts.push([frX + frBevelX - bevel, frZ + frBevelZ]);
-            } else {
-                innerVerts.push([frX + frBevelX, frZ + frBevelZ]);
+            if (!hasFront) {
+                addFace(
+                    [x1, y1, z1],
+                    [x0, y1, z1],
+                    [x0, y0, z1],
+                    [x1, y0, z1],
+                    0, 0, 1, parsedColor
+                );
             }
 
-            // Front-left corner
-            if (cornerFrontLeft && (bevelLeft || bevelFront)) {
-                if (bevelFront) innerVerts.push([flX + flBevelX + bevel, flZ + flBevelZ]);
-                if (bevelLeft) innerVerts.push([flX + flBevelX, flZ + flBevelZ - bevel]);
-            } else {
-                innerVerts.push([flX + flBevelX, flZ + flBevelZ]);
-            }
-
-            // ===== BUILD OUTER PERIMETER (original corners, no inset) =====
-            // Also track which segments are exposed (need vertical walls)
-            let outerVerts = [];
-            let outerEdgeExposed = [];  // true if segment from outerVerts[i] to outerVerts[i+1] needs walls
-
-            // Back-left corner
-            if (cornerBackLeft && (bevelLeft || bevelBack)) {
-                if (bevelLeft) {
-                    outerVerts.push([blX, blZ + bevel]);
-                    outerEdgeExposed.push(true);  // Corner bevel segment
-                }
-                if (bevelBack) {
-                    outerVerts.push([blX + bevel, blZ]);
-                    outerEdgeExposed.push(true);  // Back edge starts here
-                }
-            } else {
-                outerVerts.push([blX, blZ]);
-                outerEdgeExposed.push(bevelBack);  // Back edge
-            }
-
-            // Back-right corner
-            if (cornerBackRight && (bevelRight || bevelBack)) {
-                if (bevelBack) {
-                    outerVerts.push([brX - bevel, brZ]);
-                    outerEdgeExposed.push(true);  // Corner bevel segment
-                }
-                if (bevelRight) {
-                    outerVerts.push([brX, brZ + bevel]);
-                    outerEdgeExposed.push(true);  // Right edge starts here
-                }
-            } else {
-                outerVerts.push([brX, brZ]);
-                outerEdgeExposed.push(bevelRight);  // Right edge
-            }
-
-            // Front-right corner
-            if (cornerFrontRight && (bevelRight || bevelFront)) {
-                if (bevelRight) {
-                    outerVerts.push([frX, frZ - bevel]);
-                    outerEdgeExposed.push(true);  // Corner bevel segment
-                }
-                if (bevelFront) {
-                    outerVerts.push([frX - bevel, frZ]);
-                    outerEdgeExposed.push(true);  // Front edge starts here
-                }
-            } else {
-                outerVerts.push([frX, frZ]);
-                outerEdgeExposed.push(bevelFront);  // Front edge
-            }
-
-            // Front-left corner
-            if (cornerFrontLeft && (bevelLeft || bevelFront)) {
-                if (bevelFront) {
-                    outerVerts.push([flX + bevel, flZ]);
-                    outerEdgeExposed.push(true);  // Corner bevel segment
-                }
-                if (bevelLeft) {
-                    outerVerts.push([flX, flZ - bevel]);
-                    outerEdgeExposed.push(true);  // Left edge (wraps to start)
-                }
-            } else {
-                outerVerts.push([flX, flZ]);
-                outerEdgeExposed.push(bevelLeft);  // Left edge (wraps to start)
-            }
-
-            // ===== INNER TOP FACE =====
-            const topStartIdx = positions.length / 3;
-            for (const v of innerVerts) {
-                addVertex(v[0], innerTopY, v[1], 0, 1, 0, parsedColor);
-            }
-            for (let i = 1; i < innerVerts.length - 1; i++) {
-                indices.push(topStartIdx, topStartIdx + i + 1, topStartIdx + i);
-            }
-
-            // ===== TOP BEVEL STRIP =====
-            // Connect inner perimeter (at innerTopY) to outer perimeter (at outerTopY)
-            // Only generate bevels for exposed edges
-            const n = innerVerts.length;
-            for (let i = 0; i < n; i++) {
-                if (!outerEdgeExposed[i]) continue;  // Skip internal edges
-
-                const i2 = (i + 1) % n;
-                const inner1 = innerVerts[i];
-                const inner2 = innerVerts[i2];
-                const outer1 = outerVerts[i];
-                const outer2 = outerVerts[i2];
-
-                // Calculate normal for this bevel face (pointing outward and upward)
-                const dx = outer2[0] - outer1[0];
-                const dz = outer2[1] - outer1[1];
-                const len = Math.sqrt(dx * dx + dz * dz);
-                const sideNx = dz / len;
-                const sideNz = -dx / len;
-                // Bevel normal is tilted 45 degrees up
-                const bevelLen = Math.sqrt(2);
-                const nx = sideNx / bevelLen;
-                const ny = 1 / bevelLen;
-                const nz = sideNz / bevelLen;
-
-                const bevelStartIdx = positions.length / 3;
-                addVertex(inner1[0], innerTopY, inner1[1], nx, ny, nz, parsedColor);
-                addVertex(inner2[0], innerTopY, inner2[1], nx, ny, nz, parsedColor);
-                addVertex(outer2[0], outerTopY, outer2[1], nx, ny, nz, parsedColor);
-                addVertex(outer1[0], outerTopY, outer1[1], nx, ny, nz, parsedColor);
-                indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
-                indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
-            }
-
-            // ===== VERTICAL SIDES =====
-            // Connect outer perimeter at outerTopY to outer perimeter at outerBotY
-            // Only generate walls for exposed edges (where outerEdgeExposed is true)
-            for (let i = 0; i < n; i++) {
-                if (!outerEdgeExposed[i]) continue;  // Skip internal edges
-
-                const i2 = (i + 1) % n;
-                const t1 = outerVerts[i];
-                const t2 = outerVerts[i2];
-
-                const dx = t2[0] - t1[0];
-                const dz = t2[1] - t1[1];
-                const len = Math.sqrt(dx * dx + dz * dz);
-                const nx = dz / len;
-                const nz = -dx / len;
-
-                const sideStartIdx = positions.length / 3;
-                addVertex(t1[0], outerTopY, t1[1], nx, 0, nz, parsedColor);
-                addVertex(t2[0], outerTopY, t2[1], nx, 0, nz, parsedColor);
-                addVertex(t2[0], outerBotY, t2[1], nx, 0, nz, parsedColor);
-                addVertex(t1[0], outerBotY, t1[1], nx, 0, nz, parsedColor);
-                indices.push(sideStartIdx, sideStartIdx + 1, sideStartIdx + 2);
-                indices.push(sideStartIdx, sideStartIdx + 2, sideStartIdx + 3);
-            }
-
-            // ===== BOTTOM BEVEL STRIP =====
-            // Connect outer perimeter (at outerBotY) to inner perimeter (at innerBotY)
-            // Only generate bevels for exposed edges
-            for (let i = 0; i < n; i++) {
-                if (!outerEdgeExposed[i]) continue;  // Skip internal edges
-
-                const i2 = (i + 1) % n;
-                const outer1 = outerVerts[i];
-                const outer2 = outerVerts[i2];
-                const inner1 = innerVerts[i];
-                const inner2 = innerVerts[i2];
-
-                const dx = outer2[0] - outer1[0];
-                const dz = outer2[1] - outer1[1];
-                const len = Math.sqrt(dx * dx + dz * dz);
-                const sideNx = dz / len;
-                const sideNz = -dx / len;
-                // Bevel normal is tilted 45 degrees down
-                const bevelLen = Math.sqrt(2);
-                const nx = sideNx / bevelLen;
-                const ny = -1 / bevelLen;
-                const nz = sideNz / bevelLen;
-
-                const bevelStartIdx = positions.length / 3;
-                addVertex(outer1[0], outerBotY, outer1[1], nx, ny, nz, parsedColor);
-                addVertex(outer2[0], outerBotY, outer2[1], nx, ny, nz, parsedColor);
-                addVertex(inner2[0], innerBotY, inner2[1], nx, ny, nz, parsedColor);
-                addVertex(inner1[0], innerBotY, inner1[1], nx, ny, nz, parsedColor);
-                indices.push(bevelStartIdx, bevelStartIdx + 1, bevelStartIdx + 2);
-                indices.push(bevelStartIdx, bevelStartIdx + 2, bevelStartIdx + 3);
-            }
-
-            // ===== INNER BOTTOM FACE =====
-            const botStartIdx = positions.length / 3;
-            for (const v of innerVerts) {
-                addVertex(v[0], innerBotY, v[1], 0, -1, 0, parsedColor);
-            }
-            for (let i = 1; i < innerVerts.length - 1; i++) {
-                indices.push(botStartIdx, botStartIdx + i, botStartIdx + i + 1);
+            if (!hasBack) {
+                addFace(
+                    [x0, y1, z0],
+                    [x1, y1, z0],
+                    [x1, y0, z0],
+                    [x0, y0, z0],
+                    0, 0, -1, parsedColor
+                );
             }
         }
     }
 
-    // Create BufferGeometry
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
@@ -1313,7 +1030,6 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
                     transparent: true,
                     side: THREE.DoubleSide,
                 });
-                addInstancedUvRotation(spriteGlassMaterials[spriteIndex]);
             }
             material = spriteGlassMaterials[spriteIndex];
         }
@@ -1321,10 +1037,6 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.count = 0;
-        // Add per-instance UV rotation attribute
-        const uvRotations = new Float32Array(maxInstances);
-        mesh.geometry.setAttribute('instanceUvRotation',
-            new THREE.InstancedBufferAttribute(uvRotations, 1));
         instancedMeshes[spriteIndex] = mesh;
         instanceCounts[spriteIndex] = 0;
         levelGroup.add(mesh);
@@ -1365,10 +1077,6 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
 
     mesh.setMatrixAt(instanceIndex, matrix);
 
-    // Set instance UV rotation based on position. Basically random, but stable.
-    const uvRotAttr = mesh.geometry.getAttribute('instanceUvRotation');
-    uvRotAttr.setX(instanceIndex, (baseX + baseZ * Math.E) * 1000);
-    uvRotAttr.needsUpdate = true;
 }
 
 /**
