@@ -749,7 +749,7 @@ function onMouseDown(event, wasFiredByTouch = false) {
 	if (lmb ) {
         lastDownTarget = event.target;
         keybuffer=[];
-        if (event.target===canvas || event.target.className==="tapFocusIndicator") {
+        if (event.target===canvas || event.target.id==="gameCanvas3D" || event.target.className==="tapFocusIndicator") {
         	setMouseCoord(event);
         	dragging=true;
         	rightdragging=false;
@@ -769,7 +769,7 @@ function onMouseDown(event, wasFiredByTouch = false) {
         dragging=false;
         rightdragging=false; 
     } else if (rmb) {
-    	if (event.target.id==="gameCanvas") {
+    	if (event.target.id==="gameCanvas" || event.target.id==="gameCanvas3D") {
 			setMouseCoord(event);
 		    dragging=false;
 		    rightdragging=true;
@@ -823,7 +823,7 @@ function onMouseUp(event, wasFiredByTouch = false) {
 	}
 
 	if (lmb) {
-        if (event.target===canvas) {
+        if (event.target===canvas || event.target.id==="gameCanvas3D") {
         	setMouseCoord(event);
         	if ("mouse_up" in state.metadata) {
 				if (wasFiredByTouch) {
@@ -833,7 +833,7 @@ function onMouseUp(event, wasFiredByTouch = false) {
 			}
         }
     } else if (rmb) {
-    	if (event.target.id==="gameCanvas") {
+    	if (event.target.id==="gameCanvas" || event.target.id==="gameCanvas3D") {
         	setMouseCoord(event);
         	if ("mouse_rup" in state.metadata) {
 				return mouseAction(event,true,state.rmbupID);
@@ -864,7 +864,11 @@ function onKeyDown(event) {
     	return prevent(event);
     }
 
-    if(lastDownTarget === canvas || (window.Mobile && (lastDownTarget === window.Mobile.focusIndicator) ) ){
+    const isGameCanvas = lastDownTarget === canvas ||
+      (lastDownTarget && lastDownTarget.id === 'gameCanvas3D') ||
+      (window.Mobile && (lastDownTarget === window.Mobile.focusIndicator));
+
+    if (isGameCanvas){
     	if (keybuffer.indexOf(event.keyCode)===-1) {
     		if (event&&(event.ctrlKey || event.metaKey)){
 		    } else {
@@ -1527,6 +1531,7 @@ function checkKey(e,justPressed) {
 
             } else {
                 pushInput(inputdir);
+                if (typeof snapshotLevelState === 'function') snapshotLevelState();
                 if (processInput(inputdir)) {
                     redraw();
                 }
@@ -1561,6 +1566,7 @@ function update() {
     if (againing) {
         if (timer>againinterval && messagetext == "") {
         //if (timer>againinterval && messagetext == "" && !isTweening) {
+            if (typeof snapshotLevelState === 'function') snapshotLevelState();
             if (processInput(-1)) {
                 draw = true;
                 keyRepeatTimer=0;
@@ -1618,6 +1624,7 @@ function update() {
         if (autotick>autotickinterval) {
             autotick=0;
             pushInput("tick");
+            if (typeof snapshotLevelState === 'function') snapshotLevelState();
             if (processInput(-1)) {
                 draw = true;
             }
