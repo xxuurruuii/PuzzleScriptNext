@@ -668,6 +668,7 @@ function loadLevelFromLevelDat(state,leveldat,randomseed,clearinputhistory) {
   	state.metadata = deepClone(state.default_metadata);
     againing=false;
 	suppressInput = false;
+	reset3DCameraIfAvailable();
     if (leveldat===undefined) {
     	consolePrint("Trying to access a level that doesn't exist.",true);
 		curLevelNo = 0;  // bad level from storage, needs to be reset in case of skip_title_screen
@@ -930,6 +931,12 @@ function tryPlayCloseMessageSound(){
 var backups=[];
 var restartTarget;
 
+function reset3DCameraIfAvailable() {
+	if (typeof window !== 'undefined' && typeof window.reset3DCamera === 'function') {
+		window.reset3DCamera();
+	}
+}
+
 // create backup of level data for undo, restart, etc
 function backupLevel() {
 	const ret = level4Serialization();
@@ -1005,6 +1012,7 @@ function setGameState(_state, command, randomseed) {
     switch(command[0]){
     	case "restart":
     	{
+			reset3DCameraIfAvailable();
 		    winning=false;
 		    timer=0;
 		    titleScreen=true;
@@ -1392,6 +1400,7 @@ function DoRestart(force) {
 
 	restoreLevel(restartTarget, true);
 	initSmoothCamera();
+	reset3DCameraIfAvailable();
 	tryPlayRestartSound();
 	document.dispatchEvent(new CustomEvent("psplusLevelRestarted", {detail: curLevelNo}));
 

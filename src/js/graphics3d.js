@@ -50,6 +50,18 @@ const CAMERA_DISTANCE = 1.5;
 let cameraDistance = CAMERA_DISTANCE;
 let cameraAngleX = 1.2;
 let cameraAngleY = 0.0;
+let cameraZoomFactor = 1.0;
+
+// Mouse camera controls
+let isRotatingCamera = false;
+let rotateLastX = 0;
+let rotateLastY = 0;
+const CAMERA_ROTATE_SPEED = 0.01;
+const CAMERA_MIN_PITCH = 0.2;
+const CAMERA_MAX_PITCH = 1.5;
+const CAMERA_MIN_ZOOM = 0.4;
+const CAMERA_MAX_ZOOM = 3.0;
+const CAMERA_ZOOM_STEP = 0.12;
 
 /**
  * Add per-instance UV rotation to a material using onBeforeCompile.
@@ -157,6 +169,14 @@ function init3DRenderer() {
             lastDownTarget = renderer3d.domElement;
         }
     });
+    renderer3d.domElement.addEventListener('mousedown', on3DMouseDown, false);
+    renderer3d.domElement.addEventListener('wheel', on3DMouseWheel, { passive: false });
+    renderer3d.domElement.addEventListener('contextmenu', on3DContextMenu, false);
+    window.addEventListener('mousemove', on3DMouseMove, false);
+    window.addEventListener('mouseup', on3DMouseUp, false);
+    window.addEventListener('blur', function() {
+        isRotatingCamera = false;
+    }, false);
 
     // Create the scene
     scene3d = new THREE.Scene();
@@ -257,6 +277,95 @@ function onWindowResize3D() {
     camera3d.aspect = container3d.clientWidth / container3d.clientHeight;
     camera3d.updateProjectionMatrix();
     renderer3d.setSize(container3d.clientWidth, container3d.clientHeight);
+}
+
+function clampValue(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+function is3DInteractionEnabled() {
+    return !!(
+        renderer3d &&
+        scene3d &&
+        camera3d &&
+        window.use3DRenderer &&
+        !textMode &&
+        !levelEditorOpened
+    );
+}
+
+function render3DSceneNow() {
+    if (!renderer3d || !scene3d || !camera3d) return;
+    renderer3d.render(scene3d, camera3d);
+}
+
+function on3DMouseDown(e) {
+    if (typeof lastDownTarget !== 'undefined' && renderer3d) {
+        lastDownTarget = renderer3d.domElement;
+    }
+
+    if (e.button !== 2 || !is3DInteractionEnabled()) return;
+
+    isRotatingCamera = true;
+    rotateLastX = e.clientX;
+    rotateLastY = e.clientY;
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function on3DMouseMove(e) {
+    if (!isRotatingCamera) return;
+
+    if (!is3DInteractionEnabled()) {
+        isRotatingCamera = false;
+        return;
+    }
+
+    const dx = e.clientX - rotateLastX;
+    const dy = e.clientY - rotateLastY;
+    rotateLastX = e.clientX;
+    rotateLastY = e.clientY;
+
+    cameraAngleY -= dx * CAMERA_ROTATE_SPEED;
+    cameraAngleX = clampValue(cameraAngleX + dy * CAMERA_ROTATE_SPEED, CAMERA_MIN_PITCH, CAMERA_MAX_PITCH);
+
+    updateCameraPosition();
+    render3DSceneNow();
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function on3DMouseUp(e) {
+    if (!isRotatingCamera) return;
+    if (e.type === 'mouseup' && e.button !== 2) return;
+
+    isRotatingCamera = false;
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function on3DMouseWheel(e) {
+    if (!is3DInteractionEnabled()) return;
+
+    const delta = Math.sign(e.deltaY);
+    if (delta === 0) return;
+
+    const zoomScale = delta > 0 ? (1 + CAMERA_ZOOM_STEP) : (1 / (1 + CAMERA_ZOOM_STEP));
+    const oldZoomFactor = cameraZoomFactor;
+    cameraZoomFactor = clampValue(cameraZoomFactor * zoomScale, CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM);
+    const appliedScale = cameraZoomFactor / oldZoomFactor;
+    cameraDistance *= appliedScale;
+
+    updateCameraPosition();
+    render3DSceneNow();
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function on3DContextMenu(e) {
+    if (!is3DInteractionEnabled()) return;
+    e.preventDefault();
+    e.stopPropagation();
 }
 
 /**
@@ -1359,7 +1468,8 @@ function redraw3D() {
     // Update camera to center on visible area
     const visibleWidth = maxi - mini;
     const visibleHeight = maxj - minj;
-    cameraDistance = Math.max(visibleWidth / camera3d.aspect, visibleHeight) * state.sprite_size * CAMERA_DISTANCE;
+    const baseCameraDistance = Math.max(visibleWidth / camera3d.aspect, visibleHeight) * state.sprite_size * CAMERA_DISTANCE;
+    cameraDistance = baseCameraDistance * cameraZoomFactor;
     updateCameraPosition();
 
     // Update shadow camera to cover the level area
@@ -1518,7 +1628,24 @@ function toggle3DRenderer() {
     console.log('Rendering mode: ' + (window.use3DRenderer ? '3D' : '2D'));
 }
 
+function reset3DCamera() {
+    cameraAngleX = 1.2;
+    cameraAngleY = 0.0;
+    cameraZoomFactor = 1.0;
+    isRotatingCamera = false;
+    updateCameraPosition();
+}
+
+document.addEventListener('psplusLevelLoaded', function() {
+    reset3DCamera();
+});
+
+document.addEventListener('psplusLevelRestarted', function() {
+    reset3DCamera();
+});
+
 // Allow access from other files.
 window.redraw3D = redraw3D;
 window.snapshotLevelState = snapshotLevelState;
+window.reset3DCamera = reset3DCamera;
 window.use3DRenderer = false;
