@@ -38,17 +38,19 @@
 		<button onclick="resetCredential();">Reset GitHub credential</button>
 	</div>
 <script>
+const OAUTH_TOKEN_STORAGE_KEY = "oauth_access_token_xr";
+
 //	Set token if found in parameters
 	var url = new URL(window.location);
 	const access_token = url.searchParams.get("pat");
 	if (typeof access_token === "string")
 	{
 		console.log(access_token)
-		window.localStorage.setItem("oauth_access_token", access_token)
+		window.localStorage.setItem(OAUTH_TOKEN_STORAGE_KEY, access_token)
 	}
 
 //	Display appropriate message
-	const oauthAccessToken = window.localStorage.getItem("oauth_access_token")
+	const oauthAccessToken = window.localStorage.getItem(OAUTH_TOKEN_STORAGE_KEY)
 	if (typeof oauthAccessToken === "string")
 	{
 		document.getElementById('main').style.display = 'none'
@@ -56,9 +58,9 @@
 	}
 
 //	Remove token if needed
-	function resetCredential()
+function resetCredential()
 	{
-		window.localStorage.removeItem("oauth_access_token")
+		window.localStorage.removeItem(OAUTH_TOKEN_STORAGE_KEY)
 		window.location = window.location.href.split("?")[0] // reload page without params
 	}
 </script>

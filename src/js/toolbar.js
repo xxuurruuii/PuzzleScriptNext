@@ -209,6 +209,7 @@ function levelEditorClick_Fn() {
 // https://stackoverflow.com/questions/1034621/get-the-current-url-with-javascript
 const HOSTPAGEURL = window.location.origin + window.location.pathname;
 const PSFORKNAME = "Puzzlescript Next";
+const OAUTH_TOKEN_STORAGE_KEY = "oauth_access_token_xr";
 
 // I don't want to setup the required server for an OAuth App, so for now we will use a slightly 
 // more complex method for the user, which is to create a personal identification token.
@@ -237,7 +238,7 @@ function cloudSaveClick()
 }
 
 function shareClick() {
-	var oauthAccessToken = storage_get("oauth_access_token");
+	var oauthAccessToken = storage_get(OAUTH_TOKEN_STORAGE_KEY);
 	if (typeof oauthAccessToken !== "string") {
 		// Generates 32 letters of random data, like "liVsr/e+luK9tC02fUob75zEKaL4VpQn".
 		printUnauthorized();
@@ -281,7 +282,7 @@ function shareClick() {
 		{
 			if (githubHTTPClient.statusText==="Unauthorized"){
 				consoleError("Authorization check failed.  You have to log back into GitHub (or give it permission again or something).");
-				storage_remove("oauth_access_token");
+				storage_remove(OAUTH_TOKEN_STORAGE_KEY);
 			} else {
 				consoleError("HTTP Error "+ githubHTTPClient.status + ' - ' + githubHTTPClient.statusText);
 				consoleError("Try giving "+PSFORKNAME+" permission again, that might fix things...");
@@ -318,7 +319,7 @@ function shareClick() {
 }
 
 function githubLogOut(){
-	storage_remove("oauth_access_token");
+	storage_remove(OAUTH_TOKEN_STORAGE_KEY);
 
 	const authUrl = getAuthURL();
 	consolePrint(
