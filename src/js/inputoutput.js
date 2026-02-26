@@ -386,11 +386,15 @@ function printLevel() {
 
 function levelEditorClick(event,click) {
 	if (mouseCoordY<=-2) {
+		var paletteCols = Math.max(2, Math.floor(canvas.width / cellwidth));
+		var paletteCellWidth = cellwidth;
+		var paletteSlotsPerRow = paletteCols - 1;
+		var paletteMouseCol = Math.floor((mousePixelX + xoffset) / paletteCellWidth);
 		var ypos = editorRowCount-(-mouseCoordY-2)-1;
-		var newindex=mouseCoordX+(screenwidth-1)*ypos;
-		if (mouseCoordX===-1) {
+		var newindex=(paletteMouseCol-1)+paletteSlotsPerRow*ypos;
+		if (paletteMouseCol===0) {
 			printLevel();
-		} else if (mouseCoordX>=0&&newindex<glyphImages.length) {
+		} else if (paletteMouseCol>=1&&paletteMouseCol<paletteCols&&newindex<glyphImages.length) {
 			glyphSelectedIndex=newindex;
 			redraw();
 		}
@@ -448,8 +452,12 @@ function levelEditorClick(event,click) {
 
 function levelEditorRightClick(event,click) {
 	if (mouseCoordY===-2) {
-		if (mouseCoordX<=glyphImages.length) {
-			glyphSelectedIndex=mouseCoordX;
+		var paletteCols = Math.max(2, Math.floor(canvas.width / cellwidth));
+		var paletteCellWidth = cellwidth;
+		var paletteMouseCol = Math.floor((mousePixelX + xoffset) / paletteCellWidth);
+		var glyphIndex = paletteMouseCol - 1;
+		if (paletteMouseCol>=1 && paletteMouseCol<paletteCols && glyphIndex<glyphImages.length) {
+			glyphSelectedIndex=glyphIndex;
 			redraw();
 		}
 	} else if (mouseCoordX>-1&&mouseCoordY>-1&&mouseCoordX<screenwidth-2&&mouseCoordY<screenheight-2-editorRowCount	) {

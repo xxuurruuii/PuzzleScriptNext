@@ -518,8 +518,6 @@ function redrawCellGrid(curlevel) {
     };
 
     if (levelEditorOpened) {
-        const glyphcount = glyphCount();
-        editorRowCount = Math.ceil(glyphcount/(screenwidth-1));
         minMaxIJ[2] -= 2;
         minMaxIJ[3] -= 2 + editorRowCount;
     } else if (flickscreen) {
@@ -1010,26 +1008,33 @@ function drawEditorIcons(mini,minj) {
 							glyphStartIndex+Math.max(glyphCount-glyphStartIndex,0)
 							);*/
 	var glyphsToDisplay = glyphEndIndex-glyphStartIndex;
+	var toolbarCols = Math.max(2, Math.floor(canvas.width / cellwidth)); // print button + glyph slots
+	var toolbarCellWidth = cellwidth;
+	var toolbarSlotsPerRow = toolbarCols - 1;
+	var toolbarMouseCol = Math.floor((mousePixelX + xoffset) / toolbarCellWidth);
+	var toolbarTopY = Math.max(0, yoffset-cellheight*(1+editorRowCount));
 
-	ctx.drawImage(glyphPrintButton,xoffset-cellwidth,yoffset-cellheight*(1+editorRowCount));
-	if (mouseCoordY===(-1-editorRowCount)&&mouseCoordX===-1) {
-			ctx.drawImage(glyphMouseOver,xoffset-cellwidth,yoffset-cellheight*(1+editorRowCount));								
+	ctx.drawImage(glyphPrintButton, 0, toolbarTopY, toolbarCellWidth, cellheight);
+	if (mouseCoordY===(-1-editorRowCount) && toolbarMouseCol===0) {
+			ctx.drawImage(glyphMouseOver, 0, toolbarTopY, toolbarCellWidth, cellheight);								
 	}
 
 	var ypos = editorRowCount-(-mouseCoordY-2)-1;
-	var mouseIndex=mouseCoordX+(screenwidth-1)*ypos;
+	var mouseIndex=(toolbarMouseCol-1)+toolbarSlotsPerRow*ypos;
 
 	for (var i=0;i<glyphsToDisplay;i++) {
 		var glyphIndex = glyphStartIndex+i;
 		var sprite = glyphImages[glyphIndex];
-        var xpos=i%(screenwidth-1);
-        var ypos=(i/(screenwidth-1))|0;
-		ctx.drawImage(sprite,xoffset+(xpos)*cellwidth,yoffset+ypos*cellheight-cellheight*(1+editorRowCount));
-		if (mouseCoordX>=0&&mouseCoordX<(screenwidth-1)&&mouseIndex===i) {
-			ctx.drawImage(glyphMouseOver,xoffset+xpos*cellwidth,yoffset+ypos*cellheight-cellheight*(1+editorRowCount));						
+        var xpos=i%toolbarSlotsPerRow;
+        var ypos=(i/toolbarSlotsPerRow)|0;
+		var drawX = (xpos+1) * toolbarCellWidth;
+		var drawY = toolbarTopY + ypos*cellheight;
+		ctx.drawImage(sprite, drawX, drawY, toolbarCellWidth, cellheight);
+		if (toolbarMouseCol>=1 && toolbarMouseCol<toolbarCols && mouseIndex===i) {
+			ctx.drawImage(glyphMouseOver, drawX, drawY, toolbarCellWidth, cellheight);						
 		}
 		if (i===glyphSelectedIndex) {
-			ctx.drawImage(glyphHighlight,xoffset+xpos*cellwidth,yoffset+ypos*cellheight-cellheight*(1+editorRowCount));
+			ctx.drawImage(glyphHighlight, drawX, drawY, toolbarCellWidth, cellheight);
 		} 		
 	}
 
@@ -1037,7 +1042,7 @@ function drawEditorIcons(mini,minj) {
     var tooltip_string = ''
     var tooltip_objects = null
     // prepare tooltip: legend for highlighted editor icon
-    if ( (mouseCoordX >= 0) && (mouseCoordX < screenwidth) && (mouseIndex >= 0) && (mouseIndex < glyphsToDisplay) )
+    if ( (toolbarMouseCol >= 1) && (toolbarMouseCol < toolbarCols) && (mouseIndex >= 0) && (mouseIndex < glyphsToDisplay) )
     {
         const glyphIndex = glyphStartIndex + mouseIndex
         const identifier_index = glyphImagesCorrespondance[glyphIndex]
@@ -1067,7 +1072,7 @@ function drawEditorIcons(mini,minj) {
 		ctx.font = '16px sans-serif';
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'middle';
-		ctx.fillText(tooltip_string, xoffset + screenwidth * cellwidth/2, yoffset-0.5*cellheight);//, screenwidth * cellwidth);
+		ctx.fillText(tooltip_string, canvas.width/2, toolbarTopY + editorRowCount*cellheight + 0.5*cellheight);//, screenwidth * cellwidth);
     }
 
 	if (mouseCoordX>=-1&&mouseCoordY>=-1&&mouseCoordX<screenwidth-1&&mouseCoordY<screenheight-1-editorRowCount) {
@@ -1131,30 +1136,48 @@ function canvasResize(level) {
         screenheight=state.metadata.smoothscreen.screenSize.height;
     }
 
-    cellwidth = canvas.width / screenwidth;
-    cellheight = (canvas.height - statusLineHeight) / screenheight;
-
-    // If we need a status line, this will reduce the cell height to allow room
     statusLineHeight = state.metadata.status_line ? canvas.height / TITLE_HEIGHT : 0;
 
-    // round the cell size as a multiple of sprite size
-    let h = state.cell_height || state.sprite_size || 5;
-    let w = state.sprite_size || 5;
+    function recalcCellMetrics() {
+        cellwidth = canvas.width / screenwidth;
+        cellheight = (canvas.height - statusLineHeight) / screenheight;
 
-    if (textMode) {
-        w= 5 + 1;
-        const xchar = font['X'].split('\n').map(a=>a.trim());
-        h = xchar.length;        
+        // round the cell size as a multiple of sprite size
+        let h = state.cell_height || state.sprite_size || 5;
+        let w = state.sprite_size || 5;
+
+        if (textMode) {
+            w= 5 + 1;
+            const xchar = font['X'].split('\n').map(a=>a.trim());
+            h = xchar.length;        
+        }
+        cellwidth = w * Math.max( ~~(cellwidth / w),1);
+        cellheight = h * Math.max(~~(cellheight / h),1);
+        
+        if (cellwidth / w > cellheight / h  || (textMode && state.metadata.custom_font !== undefined && loadedCustomFont)) {
+            cellwidth = cellheight * w / h;
+        } else {
+            cellheight = cellwidth * h / w;
+        }
+        pixelSize = cellheight / h;
     }
-    cellwidth = w * Math.max( ~~(cellwidth / w),1);
-    cellheight = h * Math.max(~~(cellheight / h),1);
-    
-    if (cellwidth / w > cellheight / h  || (textMode && state.metadata.custom_font !== undefined && loadedCustomFont)) {
-        cellwidth = cellheight * w / h;
-    } else {
-        cellheight = cellwidth * h / w;
+
+    recalcCellMetrics();
+
+    if (levelEditorOpened && !textMode) {
+        // Iterate to a stable editor row count, since row count affects cell size.
+        const glyphcount = glyphCount();
+        for (var k = 0; k < 6; k++) {
+            const toolbarCols = Math.max(2, Math.floor(canvas.width / cellwidth));
+            const toolbarSlotsPerRow = toolbarCols - 1;
+            const nextEditorRows = Math.ceil(glyphcount / toolbarSlotsPerRow);
+            if (nextEditorRows === editorRowCount)
+                break;
+            editorRowCount = nextEditorRows;
+            screenheight = level.height + 2 + editorRowCount;
+            recalcCellMetrics();
+        }
     }
-    pixelSize = cellheight / h;
     
     // calculate an XY offset to position the board on the screen
     xoffset = (canvas.width - cellwidth * screenwidth) / 2;
@@ -1169,6 +1192,10 @@ function canvasResize(level) {
     cellheight = cellheight|0;
     xoffset = xoffset|0;
     yoffset = yoffset|0;
+    if (levelEditorOpened && !textMode) {
+        // Clamp again after integer conversion so the toolbar never crosses canvas top.
+        yoffset = Math.max(yoffset, cellheight*(1+editorRowCount));
+    }
 
     if (textMode) {
         textcellwidth = cellwidth;
