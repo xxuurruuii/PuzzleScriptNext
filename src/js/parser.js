@@ -529,7 +529,7 @@ var codeMirrorFn = function() {
             let kind = 'ERROR';
             const args = [];
             if (token = lexer.match(/^[a-z_]+/i, true)) {
-                if (state.metadata_lines[token]) {
+                if (state.metadata_lines[ident]) {
                     var otherline = state.metadata_lines[token];
                     logWarning(`You've already defined a "${errorCase(token)}" in the prelude on line ${htmlJump(otherline)}.`, state.lineNumber);
                     lexer.pushToken(token, 'ERROR');
@@ -550,7 +550,7 @@ var codeMirrorFn = function() {
 
                     while (!lexer.matchEol()) {
                         if (token = lexer.match(/^\S+/, true)) {
-                            kind = (token in colorPalettes.arnecolors) ? 'COLOR COLOR-' + token.toUpperCase()
+                            kind = (token in colorPalettes.arnecolors) ? 'COLOR COLOR-' + errorCase(token)
                                 : (token === "transparent") ? 'COLOR FADECOLOR'
                                 : token.match(/^#[0-9a-fA-F]+$/) ? 'MULTICOLOR' + token
                                 : 'METADATATEXT';
@@ -1763,7 +1763,7 @@ var codeMirrorFn = function() {
             // start of parse
             if (token = lexer.match(/^(goto|level|link|message|section|title|input|layer)/i, true)) { // allow omision of whitespace (with no warning!)
                 symbols.start = token;
-                lexer.pushToken(token, `${token.toUpperCase()}_VERB`);
+                lexer.pushToken(token, `${errorCase(token)}_VERB`);
 
                 if (token == 'link') {
                     if (!(token = lexer.match(reg_objectname, !state.case_sensitive))) 
