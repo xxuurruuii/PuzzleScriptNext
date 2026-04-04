@@ -2456,6 +2456,7 @@ function rulesToMask(state) {
         layerTemplate.push(null);
     }
 
+    ruleLoop:
     for (var i = 0; i < state.rules.length; i++) {
         var rule = state.rules[i];
         for (var j = 0; j < rule.lhs.length; j++) {
@@ -2563,7 +2564,7 @@ function rulesToMask(state) {
                     }
                     state.rules.splice(i,1);
                     i--;
-                    continue;
+                    continue ruleLoop;
                 }
                 
                 if (rule.rhs.length === 0) {
