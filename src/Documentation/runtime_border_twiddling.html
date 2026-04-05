@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="">
+    <meta name="author" content="">
+    <link rel="shortcut icon" type="image/x-icon" href="ico/favicon.ico" />
+
+    <title>Runtime Border Twiddling - PuzzleScript Next Documentation</title>
+
+    <link href="css/bootstrap.css" rel="stylesheet">
+    <link href="css/bootstrap-theme.css" rel="stylesheet">
+  </head>
+
+  <body>
+
+    <div class="navbar navbar-inverse navbar-fixed-top">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="../index.html"><img src="../images/mascot_colorful.png">Puzzlescript Next</a>
+        </div>
+        <div class="collapse navbar-collapse">
+          <ul class="nav navbar-nav">
+              <li><a href="../editor.html">Make A Game</a></li>
+              <li class="active"><a href="documentation.html">Documentation</a></li>
+          </ul>
+          <ul class="nav navbar-nav navbar-right">
+            <li><a href="https://discord.gg/3uumegUV7y">Discord</a></li>
+            <li><a href="https://groups.google.com/g/puzzlescript">Forum</a></li>
+            <li><a href="https://github.com/david-pfx/PuzzleScriptNext">GitHub</a></li>
+            <li><a href="about.html">About</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+
+<p>
+<ol class="breadcrumb">
+  <li><a href="documentation.html">Documentation</a></li>
+  <li>New stuff in ps&gt;xr</li>
+  <li class="active">runtime_border_twiddling</li>
+</ol>
+<p>
+
+<h1>runtime_border_twiddling</h1>
+
+<h2>What it does</h2>
+<p>
+The <b>runtime_border_twiddling</b> prelude flag enables a new rule command named <b>border</b>.
+With this command, your game can expand or shrink the current level bounds while the game is running.
+</p>
+
+<p>
+  <img src="images/runtime_border_twiddling_demo.gif" alt="Example of runtime border resizing during gameplay" style="max-width:100%;height:auto;">
+</p>
+<p><i>Example: level bounds changing at runtime with border commands.</i></p>
+
+<h2>How to enable it</h2>
+<ol>
+  <li>Add <b>runtime_border_twiddling</b> in the prelude.</li>
+  <li>Use <b>border</b> at the end of rules.</li>
+</ol>
+
+<pre><code>title Border Demo
+author You
+runtime_border_twiddling
+
+[ > Player | Grow ] -> [ > Player | ] border right 1
+[ > Player | Trim ] -> [ > Player | ] border left -1</code></pre>
+
+<h2>Command format</h2>
+<p>
+Use <b>border &lt;direction&gt; &lt;amount&gt;</b>.
+</p>
+<ul>
+  <li>Directions: <b>right</b>, <b>left</b>, <b>up</b>, <b>down</b></li>
+  <li>Relative direction aliases also work: <b>&lt;</b>, <b>&gt;</b>, <b>^</b>, <b>v</b></li>
+  <li>Positive amount expands in that direction</li>
+  <li>Negative amount shrinks in that direction and removes anything outside the new bounds</li>
+</ul>
+
+<h2>When the resize happens</h2>
+<p>
+<b>Border changes are applied after the current rule pass for the turn finishes,</b> so all matching/replacement logic for that pass runs first.
+</p>
+
+<h2>Notes</h2>
+<ul>
+  <li>Without <b>runtime_border_twiddling</b>, the <b>border</b> command is disabled.</li>
+  <li>If shrinking would remove too many cells, the level is clamped to a minimum size.</li>
+  <li>This feature works with <b>again</b> loops, so bounds can change over multiple automatic turns.</li>
+</ul>
+
+    </div>
+
+    <script src="js/jquery.js"></script>
+    <script src="js/bootstrap.min.js"></script>
+  </body>
+</html>

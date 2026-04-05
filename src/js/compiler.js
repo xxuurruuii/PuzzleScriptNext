@@ -1488,11 +1488,27 @@ function processRuleString(rule, state, curRules) {
                 if (needarg || twid) {
                     if (twid && !state.metadata.runtime_metadata_twiddling) {
                         logError("You can only change a flag at runtime if you have the 'runtime_metadata_twiddling' prelude flag defined!",lineNumber)
+                    } else if (tok === 'border' && !state.metadata.runtime_border_twiddling) {
+                        logError("You can only use BORDER at runtime if you have the 'runtime_border_twiddling' prelude flag defined!", lineNumber);
                     } else {
                         const index = findIndexAfterToken(origLine,tokens,i);
                         const str = origLine.substring(index).trim();
                         if (twid && str == "")
                             logError('You included a twiddleable option, but did not specify a value. The twiddle may behave strangely. Please use "set", "default", "wipe", or specify the correct value. See the documentation for more info.', lineNumber);
+                        if (tok === 'border') {
+                            const parts = str.split(/[\s,]+/).filter(Boolean);
+                            if (parts.length < 2) {
+                                logError('BORDER expects two arguments: direction and amount, for example "border right 2".', lineNumber);
+                            } else {
+                                const dir = parts[0].toLowerCase();
+                                if (['right', 'left', 'up', 'down', '<', '>', '^', 'v'].indexOf(dir) < 0) {
+                                    logError(`BORDER direction "${parts[0]}" is invalid. Use right/left/up/down or <>^v.`, lineNumber);
+                                }
+                                if (!/^[-+]?\d+$/.test(parts[1])) {
+                                    logError(`BORDER amount "${parts[1]}" is invalid. Use an integer.`, lineNumber);
+                                }
+                            }
+                        }
                         //needs to be nonempty or the system gets confused and thinks it's a whole level message rather than an interstitial.
                         commands.push([tok, str == "" ? " " : str]);
                     }
@@ -1572,11 +1588,42 @@ function deepCloneRule(rule, fnlhs, fnrhs) {
 		late: rule.late,
 		rigid: rule.rigid,
 		groupNumber: rule.groupNumber,
-		commands:rule.commands,
+		commands: (rule.commands || []).map(cmd => [ ...cmd ]),
 		randomRule:rule.randomRule,
 		globalRule:rule.globalRule,
         isOnce: rule.isOnce,
 	};
+}
+
+function absolutifyBorderCommandArg(forward, arg) {
+    const parts = (arg || '').trim().split(/[\s,]+/).filter(Boolean);
+    if (parts.length < 2) {
+        return arg;
+    }
+
+    let dir = parts[0].toLowerCase();
+    if (simpleRelativeDirections.includes(dir)) {
+        if (!(forward in relativeDict)) {
+            return arg;
+        }
+        dir = relativeDict[forward][relativeDirs.indexOf(dir)];
+    } else if (!simpleAbsoluteDirections.includes(dir)) {
+        return arg;
+    }
+
+    parts[0] = dir;
+    return parts.join(' ');
+}
+
+function absolutifyBorderCommands(rule) {
+    if (!rule || !rule.commands || !rule.direction) {
+        return;
+    }
+    for (const cmd of rule.commands) {
+        if (cmd[0] === 'border' && typeof cmd[1] === 'string') {
+            cmd[1] = absolutifyBorderCommandArg(rule.direction, cmd[1]);
+        }
+    }
 }
 
 // make multiple passes to parse and expand rules, with absolute directions and objects
@@ -1590,6 +1637,7 @@ function rulesToArray(state) {
     checkRuleObjects(state, rules);
     rules = expandRulesWithMultiDirectionObjects(state, rules);
     for (const rule of rules) {
+        absolutifyBorderCommands(rule);
         if (!debugSwitch.includes('noul')) rewriteUpLeftRules(rule);
         atomizeAggregates(state, rule);
         if (state.invalid) return; // protect next from crash

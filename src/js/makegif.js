@@ -14,6 +14,7 @@ function makeGIF() {
 	gifcanvas.style.height=screenheight*cellheight;
 
 	var gifctx = gifcanvas.getContext('2d');
+	gifctx.imageSmoothingEnabled = false;
 
 	var inputDat = inputHistory.concat([]);
 	var soundDat = soundHistory.concat([]);
@@ -33,8 +34,27 @@ function makeGIF() {
 	canvasResize();
 	redraw();
 
-	gifctx.drawImage(canvas,-xoffset,-yoffset);
-  	encoder.addFrame(gifctx);
+	// Draw the current playfield to the GIF canvas, scaling each frame to the
+	// largest size that fits while keeping it centered.
+	function addGifFrame() {
+		var srcW = Math.max(1, (screenwidth * cellwidth) | 0);
+		var srcH = Math.max(1, (screenheight * cellheight) | 0);
+		var srcX = xoffset | 0;
+		var srcY = yoffset | 0;
+
+		var scale = Math.min(gifcanvas.width / srcW, gifcanvas.height / srcH);
+		var destW = Math.max(1, Math.floor(srcW * scale));
+		var destH = Math.max(1, Math.floor(srcH * scale));
+		var destX = Math.floor((gifcanvas.width - destW) / 2);
+		var destY = Math.floor((gifcanvas.height - destH) / 2);
+
+		gifctx.fillStyle = state.bgcolor || "#000000";
+		gifctx.fillRect(0, 0, gifcanvas.width, gifcanvas.height);
+		gifctx.drawImage(canvas, srcX, srcY, srcW, srcH, destX, destY, destW, destH);
+		encoder.addFrame(gifctx);
+	}
+
+	addGifFrame();
 	var autotimer=0;
 
   	for(var i=0;i<inputDat.length;i++) {
@@ -54,8 +74,7 @@ function makeGIF() {
 			processInput(val);
 		}
 		redraw();
-		gifctx.drawImage(canvas,-xoffset,-yoffset);
-		encoder.addFrame(gifctx);
+		addGifFrame();
 		encoder.setDelay(realtimeframe?autotickinterval:repeatinterval);
 		autotimer+=repeatinterval;
 
@@ -63,8 +82,7 @@ function makeGIF() {
 			processInput(-1);		
 			redraw();
 			encoder.setDelay(againinterval);
-			gifctx.drawImage(canvas,-xoffset,-yoffset);
-	  		encoder.addFrame(gifctx);	
+			addGifFrame();
 		}
 	}
 

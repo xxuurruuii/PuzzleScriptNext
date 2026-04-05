@@ -59,6 +59,7 @@
             ["local_radius", "X", "Radius around the player to execute rules in"],
             ["runtime_metadata_twiddling", "", "Allows you to change some prelude flags during runtime using rules"],
             ["runtime_metadata_twiddling_debug", "", "Prints in the console each time the metadata is twiddled"],
+            ["runtime_border_twiddling", "", "Allows BORDER command to resize the current level at runtime using rules"],
             ["skip_title_screen", "", "Will skip the title screen when the game initializes, booting straight into the level or level select"],
             ["tween_length", "0.05", "Will animate objects that are moving using LEFT, RIGHT, UP, and DOWN. Duration in seconds."],
             ["tween_easing", "linear", "How movement animations should lerp when using TWEEN_LENGTH, e.g. 'easeInQuad', 'easeOutCubic', etc."],
@@ -88,7 +89,7 @@
             "black", "white", "darkgray", "lightgray", "gray", "red", "darkred", "lightred", "brown", "darkbrown", "lightbrown", "orange", "yellow", "green", "darkgreen", "lightgreen", "blue", "lightblue", "darkblue", "purple", "pink", "transparent"];
         var RULE_COMMAND_WORDS = [
             "COMMAND",
-            "sfx0", "sfx1", "sfx2", "sfx3", "sfx4", "sfx5", "sfx6", "sfx7", "sfx8", "sfx9", "sfx10", "cancel", "checkpoint", "restart", "win", "message", "again", "nosave", "quit",
+            "sfx0", "sfx1", "sfx2", "sfx3", "sfx4", "sfx5", "sfx6", "sfx7", "sfx8", "sfx9", "sfx10", "cancel", "checkpoint", "restart", "win", "message", "again", "nosave", "quit", "border",
             "global", "zoomscreen", "flickscreen", "smoothscreen", "key_repeat_interval", "again_interval", "realtime_interval", "background_color", "text_color", "noundo", "norestart", "goto", "undo", "message_text_align"];
 
         var CARDINAL_DIRECTION_WORDS = [
