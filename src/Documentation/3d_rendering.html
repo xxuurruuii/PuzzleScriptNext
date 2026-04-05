@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="">
+    <meta name="author" content="">
+    <link rel="shortcut icon" type="image/x-icon" href="ico/favicon.ico" />
+
+    <title>3D Rendering - PuzzleScript Next Documentation</title>
+
+    <link href="css/bootstrap.css" rel="stylesheet">
+    <link href="css/bootstrap-theme.css" rel="stylesheet">
+  </head>
+
+  <body>
+
+    <div class="navbar navbar-inverse navbar-fixed-top">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="../index.html"><img src="../images/mascot_colorful.png">Puzzlescript Next</a>
+        </div>
+        <div class="collapse navbar-collapse">
+          <ul class="nav navbar-nav">
+              <li><a href="../editor.html">Make A Game</a></li>
+              <li class="active"><a href="documentation.html">Documentation</a></li>
+          </ul>
+          <ul class="nav navbar-nav navbar-right">
+            <li><a href="https://discord.gg/3uumegUV7y">Discord</a></li>
+            <li><a href="https://groups.google.com/g/puzzlescript">Forum</a></li>
+            <li><a href="https://github.com/david-pfx/PuzzleScriptNext">GitHub</a></li>
+            <li><a href="about.html">About</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+
+<p>
+<ol class="breadcrumb">
+  <li><a href="documentation.html">Documentation</a></li>
+  <li>New stuff in ps&gt;xr</li>
+  <li class="active">3d rendering</li>
+</ol>
+<p>
+
+<h1>3d rendering</h1>
+
+<h2>What it does</h2>
+<p>
+The <b>3d rendering</b> option changes the gameplay view from flat 2D tiles to a 3D scene.
+This gives you depth, lighting, and clearer visual layering while keeping your game rules and object logic the same.
+</p>
+<p>
+  <img src="images/3d_rendering_example.png" alt="Example gameplay view with 3d rendering enabled" style="max-width:100%;height:auto;">
+</p>
+<p><i>Example: a level rendered with 3d rendering enabled.</i></p>
+
+<h2>How to use it</h2>
+<ol>
+  <li>Add <b>render_height</b> in the prelude of your game script.</li>
+  <li>Build and run the game as usual.</li>
+  <li>Gameplay levels render in 3D automatically.</li>
+</ol>
+
+<pre><code>title Example
+author You
+render_height
+
+========
+OBJECTS
+========
+...</code></pre>
+
+<h2>When to use it</h2>
+<ul>
+  <li>You want a stronger sense of depth and object stacking.</li>
+  <li>You use layered visuals and want them easier to read.</li>
+  <li>You want a more modern presentation without rewriting rules.</li>
+</ul>
+
+<h2>Notes for creators</h2>
+<ul>
+  <li>3D view is for gameplay screens; text/menu screens remain in their normal style.</li>
+  <li>Your puzzle mechanics do not change; only presentation changes.</li>
+  <li>Test readability on several levels and keep sprites clear and high contrast.</li>
+</ul>
+
+    </div>
+
+    <script src="js/jquery.js"></script>
+    <script src="js/bootstrap.min.js"></script>
+  </body>
+</html>

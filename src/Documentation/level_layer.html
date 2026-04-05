@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="">
+    <meta name="author" content="">
+    <link rel="shortcut icon" type="image/x-icon" href="ico/favicon.ico" />
+
+    <title>Level Layer - PuzzleScript Next Documentation</title>
+
+    <link href="css/bootstrap.css" rel="stylesheet">
+    <link href="css/bootstrap-theme.css" rel="stylesheet">
+  </head>
+
+  <body>
+
+    <div class="navbar navbar-inverse navbar-fixed-top">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="../index.html"><img src="../images/mascot_colorful.png">Puzzlescript Next</a>
+        </div>
+        <div class="collapse navbar-collapse">
+          <ul class="nav navbar-nav">
+              <li><a href="../editor.html">Make A Game</a></li>
+              <li class="active"><a href="documentation.html">Documentation</a></li>
+          </ul>
+          <ul class="nav navbar-nav navbar-right">
+            <li><a href="https://discord.gg/3uumegUV7y">Discord</a></li>
+            <li><a href="https://groups.google.com/g/puzzlescript">Forum</a></li>
+            <li><a href="https://github.com/david-pfx/PuzzleScriptNext">GitHub</a></li>
+            <li><a href="about.html">About</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+
+<p>
+<ol class="breadcrumb">
+  <li><a href="documentation.html">Documentation</a></li>
+  <li>New stuff in ps&gt;xr</li>
+  <li class="active">level layer</li>
+</ol>
+<p>
+
+<h1>level layer</h1>
+
+<h2>What it does</h2>
+<p>
+The <b>level layer</b> command lets you build one playable level from multiple map blocks.
+This is useful when you want to author a base map first, then add extra visual or gameplay detail in separate passes.
+</p>
+
+<h2>How to use it</h2>
+<ol>
+  <li>Write a normal map block in the <b>LEVELS</b> section.</li>
+  <li>Add a line containing <b>layer</b>.</li>
+  <li>Add another map block with the same width and height.</li>
+  <li>Repeat <b>layer</b> + map block again if you need more overlays.</li>
+</ol>
+
+<pre><code>=======
+LEVELS
+=======
+
+#######
+#..P..#
+#..A..#
+#######
+layer
+.......
+..b....
+.......
+.......</code></pre>
+
+<h2>Why it is useful</h2>
+<ul>
+  <li>Keep complex levels easier to edit by splitting content into passes.</li>
+  <li>Add detail without rewriting the original map block.</li>
+  <li>Make collaboration easier when different people edit different layers.</li>
+</ul>
+
+<h2>Rules and limits</h2>
+<ul>
+  <li><b>layer</b> must come directly after a map block.</li>
+  <li>Each overlay map must match the base map dimensions.</li>
+  <li>If two objects end up fighting for the same collision layer in a cell, compilation fails with an overlap error.</li>
+  <li>Background tiles in overlay maps can be used as transparent filler when you do not want to replace existing content.</li>
+</ul>
+
+    </div>
+
+    <script src="js/jquery.js"></script>
+    <script src="js/bootstrap.min.js"></script>
+  </body>
+</html>
