@@ -7233,6 +7233,13 @@ function redraw() {
     }
     if (debugSwitch.includes('redraw')) console.log(`Redraw: ${JSON.stringify(perfCounters)}`);
 
+    // Try 3D rendering first (if enabled and available).
+    if (typeof redraw3D === 'function') {
+        if (redraw3D()) {
+            return;
+        }
+    }
+
     if (textMode)
         redrawTextMode();
     else redrawCellGrid(curLevel);
@@ -7305,8 +7312,6 @@ function redrawCellGrid(curlevel) {
     };
 
     if (levelEditorOpened) {
-        const glyphcount = glyphCount();
-        editorRowCount = Math.ceil(glyphcount/(screenwidth-1));
         minMaxIJ[2] -= 2;
         minMaxIJ[3] -= 2 + editorRowCount;
     } else if (flickscreen) {
@@ -7797,26 +7802,33 @@ function drawEditorIcons(mini,minj) {
 							glyphStartIndex+Math.max(glyphCount-glyphStartIndex,0)
 							);*/
 	var glyphsToDisplay = glyphEndIndex-glyphStartIndex;
+	var toolbarCols = Math.max(2, Math.floor(canvas.width / cellwidth)); // print button + glyph slots
+	var toolbarCellWidth = cellwidth;
+	var toolbarSlotsPerRow = toolbarCols - 1;
+	var toolbarMouseCol = Math.floor((mousePixelX + xoffset) / toolbarCellWidth);
+	var toolbarTopY = Math.max(0, yoffset-cellheight*(1+editorRowCount));
 
-	ctx.drawImage(glyphPrintButton,xoffset-cellwidth,yoffset-cellheight*(1+editorRowCount));
-	if (mouseCoordY===(-1-editorRowCount)&&mouseCoordX===-1) {
-			ctx.drawImage(glyphMouseOver,xoffset-cellwidth,yoffset-cellheight*(1+editorRowCount));								
+	ctx.drawImage(glyphPrintButton, 0, toolbarTopY, toolbarCellWidth, cellheight);
+	if (mouseCoordY===(-1-editorRowCount) && toolbarMouseCol===0) {
+			ctx.drawImage(glyphMouseOver, 0, toolbarTopY, toolbarCellWidth, cellheight);								
 	}
 
 	var ypos = editorRowCount-(-mouseCoordY-2)-1;
-	var mouseIndex=mouseCoordX+(screenwidth-1)*ypos;
+	var mouseIndex=(toolbarMouseCol-1)+toolbarSlotsPerRow*ypos;
 
 	for (var i=0;i<glyphsToDisplay;i++) {
 		var glyphIndex = glyphStartIndex+i;
 		var sprite = glyphImages[glyphIndex];
-        var xpos=i%(screenwidth-1);
-        var ypos=(i/(screenwidth-1))|0;
-		ctx.drawImage(sprite,xoffset+(xpos)*cellwidth,yoffset+ypos*cellheight-cellheight*(1+editorRowCount));
-		if (mouseCoordX>=0&&mouseCoordX<(screenwidth-1)&&mouseIndex===i) {
-			ctx.drawImage(glyphMouseOver,xoffset+xpos*cellwidth,yoffset+ypos*cellheight-cellheight*(1+editorRowCount));						
+        var xpos=i%toolbarSlotsPerRow;
+        var ypos=(i/toolbarSlotsPerRow)|0;
+		var drawX = (xpos+1) * toolbarCellWidth;
+		var drawY = toolbarTopY + ypos*cellheight;
+		ctx.drawImage(sprite, drawX, drawY, toolbarCellWidth, cellheight);
+		if (toolbarMouseCol>=1 && toolbarMouseCol<toolbarCols && mouseIndex===i) {
+			ctx.drawImage(glyphMouseOver, drawX, drawY, toolbarCellWidth, cellheight);						
 		}
 		if (i===glyphSelectedIndex) {
-			ctx.drawImage(glyphHighlight,xoffset+xpos*cellwidth,yoffset+ypos*cellheight-cellheight*(1+editorRowCount));
+			ctx.drawImage(glyphHighlight, drawX, drawY, toolbarCellWidth, cellheight);
 		} 		
 	}
 
@@ -7824,7 +7836,7 @@ function drawEditorIcons(mini,minj) {
     var tooltip_string = ''
     var tooltip_objects = null
     // prepare tooltip: legend for highlighted editor icon
-    if ( (mouseCoordX >= 0) && (mouseCoordX < screenwidth) && (mouseIndex >= 0) && (mouseIndex < glyphsToDisplay) )
+    if ( (toolbarMouseCol >= 1) && (toolbarMouseCol < toolbarCols) && (mouseIndex >= 0) && (mouseIndex < glyphsToDisplay) )
     {
         const glyphIndex = glyphStartIndex + mouseIndex
         const identifier_index = glyphImagesCorrespondance[glyphIndex]
@@ -7854,7 +7866,7 @@ function drawEditorIcons(mini,minj) {
 		ctx.font = '16px sans-serif';
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'middle';
-		ctx.fillText(tooltip_string, xoffset + screenwidth * cellwidth/2, yoffset-0.5*cellheight);//, screenwidth * cellwidth);
+		ctx.fillText(tooltip_string, canvas.width/2, toolbarTopY + editorRowCount*cellheight + 0.5*cellheight);//, screenwidth * cellwidth);
     }
 
 	if (mouseCoordX>=-1&&mouseCoordY>=-1&&mouseCoordX<screenwidth-1&&mouseCoordY<screenheight-1-editorRowCount) {
@@ -7918,30 +7930,48 @@ function canvasResize(level) {
         screenheight=state.metadata.smoothscreen.screenSize.height;
     }
 
-    cellwidth = canvas.width / screenwidth;
-    cellheight = (canvas.height - statusLineHeight) / screenheight;
-
-    // If we need a status line, this will reduce the cell height to allow room
     statusLineHeight = state.metadata.status_line ? canvas.height / TITLE_HEIGHT : 0;
 
-    // round the cell size as a multiple of sprite size
-    let h = state.cell_height || state.sprite_size || 5;
-    let w = state.sprite_size || 5;
+    function recalcCellMetrics() {
+        cellwidth = canvas.width / screenwidth;
+        cellheight = (canvas.height - statusLineHeight) / screenheight;
 
-    if (textMode) {
-        w= 5 + 1;
-        const xchar = font['X'].split('\n').map(a=>a.trim());
-        h = xchar.length;        
+        // round the cell size as a multiple of sprite size
+        let h = state.cell_height || state.sprite_size || 5;
+        let w = state.sprite_size || 5;
+
+        if (textMode) {
+            w= 5 + 1;
+            const xchar = font['X'].split('\n').map(a=>a.trim());
+            h = xchar.length;        
+        }
+        cellwidth = w * Math.max( ~~(cellwidth / w),1);
+        cellheight = h * Math.max(~~(cellheight / h),1);
+        
+        if (cellwidth / w > cellheight / h  || (textMode && state.metadata.custom_font !== undefined && loadedCustomFont)) {
+            cellwidth = cellheight * w / h;
+        } else {
+            cellheight = cellwidth * h / w;
+        }
+        pixelSize = cellheight / h;
     }
-    cellwidth = w * Math.max( ~~(cellwidth / w),1);
-    cellheight = h * Math.max(~~(cellheight / h),1);
-    
-    if (cellwidth / w > cellheight / h  || (textMode && state.metadata.custom_font !== undefined && loadedCustomFont)) {
-        cellwidth = cellheight * w / h;
-    } else {
-        cellheight = cellwidth * h / w;
+
+    recalcCellMetrics();
+
+    if (levelEditorOpened && !textMode) {
+        // Iterate to a stable editor row count, since row count affects cell size.
+        const glyphcount = glyphCount();
+        for (var k = 0; k < 6; k++) {
+            const toolbarCols = Math.max(2, Math.floor(canvas.width / cellwidth));
+            const toolbarSlotsPerRow = toolbarCols - 1;
+            const nextEditorRows = Math.ceil(glyphcount / toolbarSlotsPerRow);
+            if (nextEditorRows === editorRowCount)
+                break;
+            editorRowCount = nextEditorRows;
+            screenheight = level.height + 2 + editorRowCount;
+            recalcCellMetrics();
+        }
     }
-    pixelSize = cellheight / h;
     
     // calculate an XY offset to position the board on the screen
     xoffset = (canvas.width - cellwidth * screenwidth) / 2;
@@ -7956,6 +7986,10 @@ function canvasResize(level) {
     cellheight = cellheight|0;
     xoffset = xoffset|0;
     yoffset = yoffset|0;
+    if (levelEditorOpened && !textMode) {
+        // Clamp again after integer conversion so the toolbar never crosses canvas top.
+        yoffset = Math.max(yoffset, cellheight*(1+editorRowCount));
+    }
 
     if (textMode) {
         textcellwidth = cellwidth;
@@ -8037,7 +8071,1372 @@ EasingFunctions = {
       11: "easeInQuint",
       12: "easeOutQuint",
       13: "easeInOutQuint"
-  }  
+  }
+</script>
+<script>
+/**
+ * PuzzleScript 3D Renderer using Three.js
+ *
+ * This module replaces the traditional 2D canvas rendering with a 3D WebGL renderer.
+ * Each pixel in the original sprites becomes a cube in 3D space.
+ */
+
+// Three.js globals
+let renderer3d = null;
+let scene3d = null;
+let camera3d = null;
+let container3d = null;  // The DOM container element
+let groundPlane = null;  // Ground plane to receive shadows
+
+// Sprite geometry caching - merged geometry per sprite type
+let spriteGeometries = {};  // spriteIndex -> THREE.BufferGeometry (merged cubes with vertex colors)
+let spriteTransmission = {};    // spriteIndex -> minimum alpha value (1.0 = fully opaque)
+let spriteGlassMaterials = {};  // spriteIndex -> MeshPhysicalMaterial (per-sprite glass with custom transmission)
+let spriteMaterial = null;  // Shared material using vertex colors
+
+// Instanced mesh system - one InstancedMesh per sprite type
+let instancedMeshes = {};   // spriteIndex -> THREE.InstancedMesh
+let instanceCounts = {};    // spriteIndex -> current instance count
+let levelGroup = null;      // THREE.Group to hold all level meshes
+let lastLevelId = null;     // Track level identity for cache invalidation
+let lastSpritesRef = null;  // Track sprites array to detect recompilation
+
+// Three-point lighting system
+let keyLight = null;     // Main shadow-casting light (warm)
+let fillLight = null;    // Soft fill light (cool)
+
+// Animation system
+let previousLevelState = null;  // Snapshot of level.objects before move
+let animationStartTime = 0;     // When current animation started
+let animationDuration = 100;    // Duration in ms for slide animation
+let isAnimating3D = false;        // Whether an animation is in progress
+let animatedMeshes = [];        // Meshes that are being animated with their start/end positions
+let animationFrameId = null;    // requestAnimationFrame ID
+
+// Camera settings
+const CAMERA_FOV = 40;
+const CAMERA_NEAR = 0.1;
+const CAMERA_FAR = 1000;
+const CUBE_SIZE = 1;
+const SPRITE_HEIGHT = 0.2;  // Sprite height as fraction of grid cell size.
+const CAMERA_DISTANCE = 1.5;
+
+// Camera position and rotation
+let cameraDistance = CAMERA_DISTANCE;
+let cameraAngleX = 1.2;
+let cameraAngleY = 0.0;
+let cameraZoomFactor = 1.0;
+
+// Mouse camera controls
+let isRotatingCamera = false;
+let rotateLastX = 0;
+let rotateLastY = 0;
+const CAMERA_ROTATE_SPEED = 0.01;
+const CAMERA_MIN_PITCH = 0.2;
+const CAMERA_MAX_PITCH = 1.5;
+const CAMERA_MIN_ZOOM = 0.4;
+const CAMERA_MAX_ZOOM = 3.0;
+const CAMERA_ZOOM_STEP = 0.12;
+
+/**
+ * Initialize the Three.js renderer, scene, and camera
+ */
+function init3DRenderer() {
+    // Get the canvas container - try different selectors for play.html vs editor.html
+    let container = document.querySelector('.gameContainer');
+    if (!container) {
+        container = document.querySelector('.upperarea');
+    }
+    if (!container) {
+        // Final fallback: use the parent of the 2D canvas
+        const canvas2d = document.getElementById('gameCanvas');
+        container = canvas2d ? canvas2d.parentElement : null;
+    }
+    if (!container) {
+        console.error('Game container not found!');
+        window.use3DRenderer = false;
+        return false;
+    }
+
+    // Store container reference for resize handling
+    container3d = container;
+
+    // Create the WebGL renderer
+    renderer3d = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true
+    });
+    renderer3d.setPixelRatio(window.devicePixelRatio);
+    renderer3d.setSize(container.clientWidth, container.clientHeight);
+    renderer3d.setClearColor(0x000000, 1);
+
+    // Enable high-quality VSM shadows (Variance Shadow Maps)
+    renderer3d.shadowMap.enabled = true;
+    renderer3d.shadowMap.type = THREE.VSMShadowMap;  // VSM for smooth soft shadows
+    renderer3d.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer3d.toneMappingExposure = 1;
+
+    renderer3d.domElement.id = 'gameCanvas3D';
+    renderer3d.domElement.style.position = 'absolute';
+    renderer3d.domElement.style.top = '0';
+    renderer3d.domElement.style.left = '0';
+    renderer3d.domElement.style.width = '100%';
+    renderer3d.domElement.style.height = '100%';
+    renderer3d.domElement.style.display = 'none';
+    renderer3d.domElement.style.touchAction = 'none';
+    renderer3d.domElement.tabIndex = 1;  // Make focusable
+    container.appendChild(renderer3d.domElement);
+
+    // Add event listeners to track focus for input handling
+    renderer3d.domElement.addEventListener('mousedown', function(e) {
+        if (typeof lastDownTarget !== 'undefined') {
+            lastDownTarget = renderer3d.domElement;
+        }
+    });
+    renderer3d.domElement.addEventListener('touchstart', function(e) {
+        if (typeof lastDownTarget !== 'undefined') {
+            lastDownTarget = renderer3d.domElement;
+        }
+    });
+    renderer3d.domElement.addEventListener('mousedown', on3DMouseDown, false);
+    renderer3d.domElement.addEventListener('wheel', on3DMouseWheel, { passive: false });
+    renderer3d.domElement.addEventListener('contextmenu', on3DContextMenu, false);
+    window.addEventListener('mousemove', on3DMouseMove, false);
+    window.addEventListener('mouseup', on3DMouseUp, false);
+    window.addEventListener('blur', function() {
+        isRotatingCamera = false;
+    }, false);
+
+    // Create the scene
+    scene3d = new THREE.Scene();
+
+    // Create a group to hold all level meshes (for efficient batch operations)
+    levelGroup = new THREE.Group();
+    scene3d.add(levelGroup);
+
+    // Create the camera
+    camera3d = new THREE.PerspectiveCamera(
+        CAMERA_FOV,
+        container.clientWidth / container.clientHeight,
+        CAMERA_NEAR,
+        CAMERA_FAR
+    );
+    updateCameraPosition();
+
+    // === THREE-POINT LIGHTING SYSTEM ===
+
+    // Ambient light - very low, just to prevent pure black shadows
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    scene3d.add(ambientLight);
+
+    // KEY LIGHT - Main parallel light, warm color, casts shadows
+    // Positioned front-right, above the scene
+    keyLight = new THREE.DirectionalLight(0xffeedd, 1.0);  // Warm white
+    keyLight.castShadow = true;
+
+    // Shadow settings for directional light
+    keyLight.shadow.mapSize.width = 2048;
+    keyLight.shadow.mapSize.height = 2048;
+    keyLight.shadow.camera.near = 0.5;
+    keyLight.shadow.camera.far = 500;
+    keyLight.shadow.camera.left = -100;
+    keyLight.shadow.camera.right = 100;
+    keyLight.shadow.camera.top = 100;
+    keyLight.shadow.camera.bottom = -100;
+
+    // VSM-specific: radius controls shadow softness (blur)
+    keyLight.shadow.radius = 8;  // Soft shadow blur radius
+    keyLight.shadow.blurSamples = 25;  // Quality of blur
+
+    // Shadow bias
+    keyLight.shadow.bias = 0.0001;
+
+    scene3d.add(keyLight);
+    scene3d.add(keyLight.target);
+
+    // FILL LIGHT - Soft light, cool color, no shadows
+    // Positioned front-left, lower than key light
+    fillLight = new THREE.DirectionalLight(0xddeeff, 1);  // Cool blue-white
+    fillLight.castShadow = false;  // Fill light doesn't cast shadows
+    scene3d.add(fillLight);
+
+    // Create shared material that uses vertex colors (flat surface, no texture map).
+    spriteMaterial = new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.7,
+        metalness: 0.0
+    });
+
+    // Handle window resize
+    window.addEventListener('resize', onWindowResize3D, false);
+
+    console.log('3D Renderer initialized successfully!');
+    return true;
+}
+
+/**
+ * Handle window resize for 3D renderer
+ */
+function onWindowResize3D() {
+    if (!renderer3d || !camera3d || !container3d) return;
+
+    camera3d.aspect = container3d.clientWidth / container3d.clientHeight;
+    camera3d.updateProjectionMatrix();
+    renderer3d.setSize(container3d.clientWidth, container3d.clientHeight);
+}
+
+function clampValue(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+function is3DInteractionEnabled() {
+    return !!(
+        renderer3d &&
+        scene3d &&
+        camera3d &&
+        window.use3DRenderer &&
+        !textMode &&
+        !levelEditorOpened
+    );
+}
+
+function render3DSceneNow() {
+    if (!renderer3d || !scene3d || !camera3d) return;
+    renderer3d.render(scene3d, camera3d);
+}
+
+function on3DMouseDown(e) {
+    if (typeof lastDownTarget !== 'undefined' && renderer3d) {
+        lastDownTarget = renderer3d.domElement;
+    }
+
+    if (e.button !== 2 || !is3DInteractionEnabled()) return;
+
+    isRotatingCamera = true;
+    rotateLastX = e.clientX;
+    rotateLastY = e.clientY;
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function on3DMouseMove(e) {
+    if (!isRotatingCamera) return;
+
+    if (!is3DInteractionEnabled()) {
+        isRotatingCamera = false;
+        return;
+    }
+
+    const dx = e.clientX - rotateLastX;
+    const dy = e.clientY - rotateLastY;
+    rotateLastX = e.clientX;
+    rotateLastY = e.clientY;
+
+    cameraAngleY -= dx * CAMERA_ROTATE_SPEED;
+    cameraAngleX = clampValue(cameraAngleX + dy * CAMERA_ROTATE_SPEED, CAMERA_MIN_PITCH, CAMERA_MAX_PITCH);
+
+    updateCameraPosition();
+    render3DSceneNow();
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function on3DMouseUp(e) {
+    if (!isRotatingCamera) return;
+    if (e.type === 'mouseup' && e.button !== 2) return;
+
+    isRotatingCamera = false;
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function on3DMouseWheel(e) {
+    if (!is3DInteractionEnabled()) return;
+
+    const delta = Math.sign(e.deltaY);
+    if (delta === 0) return;
+
+    const zoomScale = delta > 0 ? (1 + CAMERA_ZOOM_STEP) : (1 / (1 + CAMERA_ZOOM_STEP));
+    const oldZoomFactor = cameraZoomFactor;
+    cameraZoomFactor = clampValue(cameraZoomFactor * zoomScale, CAMERA_MIN_ZOOM, CAMERA_MAX_ZOOM);
+    const appliedScale = cameraZoomFactor / oldZoomFactor;
+    cameraDistance *= appliedScale;
+
+    updateCameraPosition();
+    render3DSceneNow();
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function on3DContextMenu(e) {
+    if (!is3DInteractionEnabled()) return;
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+/**
+ * Update camera position based on angles and distance
+ */
+function updateCameraPosition() {
+    if (!camera3d || !scene3d) return;
+
+    // Calculate camera position in spherical coordinates
+    const x = cameraDistance * Math.sin(cameraAngleY) * Math.cos(cameraAngleX);
+    const y = cameraDistance * Math.sin(cameraAngleX) + 10;
+    const z = cameraDistance * Math.cos(cameraAngleY) * Math.cos(cameraAngleX);
+
+    camera3d.position.set(x, y, z);
+    camera3d.lookAt(0, 0, 0);
+}
+
+/**
+ * Parse a color string, handling #RRGGBBAA format with alpha.
+ * Returns { red, green, blue, alpha, transmission }
+ */
+function parseColorWithAlpha(colorStr) {
+    if (!colorStr) return { red: 0, green: 0, blue: 0, alpha: 0, transmission: 0 };
+    const str = colorStr.toLowerCase().trim();
+
+    // Check for 8-character hex with alpha (#RRGGBBAA)
+    if (str.match(/^#[0-9a-f]{8}$/)) {
+        const r = parseInt(str.slice(1, 3), 16) / 255;
+        const g = parseInt(str.slice(3, 5), 16) / 255;
+        const b = parseInt(str.slice(5, 7), 16) / 255;
+        const a = parseInt(str.slice(7, 9), 16) / 255;
+        const transmission = 1-a;
+        return { red: r, green: g, blue: b, alpha: a, transmission };
+    }
+
+    // Check for 4-character hex with alpha (#RGBA)
+    if (str.match(/^#[0-9a-f]{4}$/)) {
+        const r = parseInt(str[1] + str[1], 16) / 255;
+        const g = parseInt(str[2] + str[2], 16) / 255;
+        const b = parseInt(str[3] + str[3], 16) / 255;
+        const a = parseInt(str[4] + str[4], 16) / 255;
+        const transmission = 1-a;
+        return { red: r, green: g, blue: b, alpha: a, transmission };
+    }
+
+    // Standard color parsing (no alpha or full opacity)
+    try {
+        const color = new THREE.Color(str);
+        return { red: color.r, green: color.g, blue: color.b, alpha: 1.0, transmission: 0 };
+    } catch (e) {
+        return { red: 0, green: 0, blue: 0, alpha: 0, transmission: 0 };
+    }
+}
+
+/**
+ * Check if a pixel in the sprite is filled (non-transparent)
+ */
+function isPixelFilled(spriteData, colors, px, py, width, height) {
+    if (px < 0 || px >= width || py < 0 || py >= height) return false;
+    const colorIndex = spriteData[py][px];
+    if (colorIndex < 0) return false;
+    const color = colors[colorIndex];
+    if (!color || color === 'transparent') return false;
+    const parsed = parseColorWithAlpha(color);
+    return parsed.alpha > 0;
+}
+
+/**
+ * Get or create a merged geometry for a sprite (all cubes combined with vertex colors).
+ * Uses hard-edged voxel cubes (no bevel/rounding on material edges).
+ */
+function getOrCreateSpriteGeometry(spriteIndex) {
+    if (spriteGeometries[spriteIndex]) {
+        return spriteGeometries[spriteIndex];
+    }
+
+    if (!objectSprites || !objectSprites[spriteIndex]) return null;
+
+    const sprite = objectSprites[spriteIndex];
+    const spriteData = sprite.dat;
+    const colors = sprite.colors;
+
+    if (!spriteData || !colors) return null;
+
+    const spriteHeight = spriteData.length;
+    const spriteWidth = spriteData[0] ? spriteData[0].length : 0;
+
+    // Count non-transparent pixels to pre-allocate arrays.
+    let cubeCount = 0;
+    for (let py = 0; py < spriteHeight; py++) {
+        for (let px = 0; px < spriteWidth; px++) {
+            if (isPixelFilled(spriteData, colors, px, py, spriteWidth, spriteHeight)) {
+                cubeCount++;
+            }
+        }
+    }
+
+    if (cubeCount === 0) return null;
+
+    // Find minimum alpha value across all colors in the sprite.
+    let transmission = 0.0;
+    for (const c of colors) {
+        if (c && c !== 'transparent') {
+            const parsed = parseColorWithAlpha(c);
+            if (parsed.alpha < 1 && parsed.transmission > transmission) {
+                transmission = parsed.transmission;
+            }
+        }
+    }
+    spriteTransmission[spriteIndex] = transmission;
+
+    const positions = [];
+    const normals = [];
+    const vertexColors = [];
+    const uvs = [];
+    const indices = [];
+
+    const halfSize = CUBE_SIZE / 2;
+    const halfSizeVertical = SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size / 2;
+    const uvScale = 0.1;
+
+    function addVertex(x, y, z, nx, ny, nz, color) {
+        positions.push(x, y, z);
+        normals.push(nx, ny, nz);
+        if (transmission === 0) {
+            vertexColors.push(color.red, color.green, color.blue);
+        } else {
+            const scale = c => c + (1 - c) * color.transmission;
+            vertexColors.push(scale(color.red), scale(color.green), scale(color.blue));
+        }
+        const u = (x + y) * uvScale;
+        const v = (z + y) * uvScale;
+        uvs.push(u, v);
+    }
+
+    function addFace(v0, v1, v2, v3, nx, ny, nz, color) {
+        const start = positions.length / 3;
+        addVertex(v0[0], v0[1], v0[2], nx, ny, nz, color);
+        addVertex(v1[0], v1[1], v1[2], nx, ny, nz, color);
+        addVertex(v2[0], v2[1], v2[2], nx, ny, nz, color);
+        addVertex(v3[0], v3[1], v3[2], nx, ny, nz, color);
+        indices.push(start, start + 1, start + 2);
+        indices.push(start, start + 2, start + 3);
+    }
+
+    for (let py = 0; py < spriteHeight; py++) {
+        for (let px = 0; px < spriteWidth; px++) {
+            if (!isPixelFilled(spriteData, colors, px, py, spriteWidth, spriteHeight)) continue;
+
+            const colorIndex = spriteData[py][px];
+            const color = colors[colorIndex];
+            const parsedColor = parseColorWithAlpha(color);
+
+            const offsetX = px * CUBE_SIZE;
+            const offsetZ = py * CUBE_SIZE;
+
+            const hasLeft = isPixelFilled(spriteData, colors, px - 1, py, spriteWidth, spriteHeight);
+            const hasRight = isPixelFilled(spriteData, colors, px + 1, py, spriteWidth, spriteHeight);
+            const hasFront = isPixelFilled(spriteData, colors, px, py + 1, spriteWidth, spriteHeight);  // +Z
+            const hasBack = isPixelFilled(spriteData, colors, px, py - 1, spriteWidth, spriteHeight);   // -Z
+
+            const x0 = -halfSize + offsetX;
+            const x1 = halfSize + offsetX;
+            const y0 = -halfSizeVertical;
+            const y1 = halfSizeVertical;
+            const z0 = -halfSize + offsetZ;
+            const z1 = halfSize + offsetZ;
+
+            // Top
+            addFace(
+                [x0, y1, z0],
+                [x0, y1, z1],
+                [x1, y1, z1],
+                [x1, y1, z0],
+                0, 1, 0, parsedColor
+            );
+
+            // Bottom
+            addFace(
+                [x0, y0, z0],
+                [x1, y0, z0],
+                [x1, y0, z1],
+                [x0, y0, z1],
+                0, -1, 0, parsedColor
+            );
+
+            if (!hasLeft) {
+                addFace(
+                    [x0, y1, z1],
+                    [x0, y1, z0],
+                    [x0, y0, z0],
+                    [x0, y0, z1],
+                    -1, 0, 0, parsedColor
+                );
+            }
+
+            if (!hasRight) {
+                addFace(
+                    [x1, y1, z0],
+                    [x1, y1, z1],
+                    [x1, y0, z1],
+                    [x1, y0, z0],
+                    1, 0, 0, parsedColor
+                );
+            }
+
+            if (!hasFront) {
+                addFace(
+                    [x1, y1, z1],
+                    [x0, y1, z1],
+                    [x0, y0, z1],
+                    [x1, y0, z1],
+                    0, 0, 1, parsedColor
+                );
+            }
+
+            if (!hasBack) {
+                addFace(
+                    [x0, y1, z0],
+                    [x1, y1, z0],
+                    [x1, y0, z0],
+                    [x0, y0, z0],
+                    0, 0, -1, parsedColor
+                );
+            }
+        }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(vertexColors, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+
+    spriteGeometries[spriteIndex] = geometry;
+    return geometry;
+}
+
+/**
+ * Reset instance counts at start of redraw
+ */
+function beginRedraw3D() {
+    for (const key in instanceCounts) {
+        instanceCounts[key] = 0;
+    }
+    animatedMeshes = [];
+}
+
+/**
+ * Finalize instanced meshes after redraw
+ */
+function endRedraw3D() {
+    for (const spriteIndex in instancedMeshes) {
+        const mesh = instancedMeshes[spriteIndex];
+        const count = instanceCounts[spriteIndex] || 0;
+        mesh.count = count;
+        mesh.instanceMatrix.needsUpdate = true;
+    }
+}
+
+/**
+ * Clear all meshes from the scene (for level changes)
+ */
+function clearScene3D() {
+    if (levelGroup) {
+        while (levelGroup.children.length > 0) {
+            levelGroup.remove(levelGroup.children[0]);
+        }
+    }
+    instancedMeshes = {};
+    instanceCounts = {};
+    animatedMeshes = [];
+    // Clear sprite geometries when switching games (sprites may have changed)
+    spriteGeometries = {};
+    spriteTransmission = {};
+    // Dispose and clear per-sprite glass materials
+    for (const key in spriteGlassMaterials) {
+        spriteGlassMaterials[key].dispose();
+    }
+    spriteGlassMaterials = {};
+}
+
+/**
+ * Snapshot the current level state before a move happens.
+ * Call this before processInput to enable smooth animation.
+ */
+function snapshotLevelState() {
+    if (!curLevel || !curLevel.objects) return;
+    previousLevelState = {
+        objects: new Int32Array(curLevel.objects),
+        width: curLevel.width,
+        height: curLevel.height
+    };
+}
+
+/**
+ * Build a map of object positions from a level state.
+ * Returns: { objectIndex: [posIndex1, posIndex2, ...], ... }
+ */
+function buildObjectPositionMap(objects, width, height) {
+    const map = {};
+    const n_tiles = width * height;
+
+    for (let posIndex = 0; posIndex < n_tiles; posIndex++) {
+        // Read the cell's object bitmask
+        for (let s = 0; s < STRIDE_OBJ; s++) {
+            const word = objects[posIndex * STRIDE_OBJ + s];
+            if (word === 0) continue;
+
+            for (let bit = 0; bit < 32; bit++) {
+                if (word & (1 << bit)) {
+                    const objectIndex = s * 32 + bit;
+                    if (!map[objectIndex]) {
+                        map[objectIndex] = [];
+                    }
+                    map[objectIndex].push(posIndex);
+                }
+            }
+        }
+    }
+    return map;
+}
+
+/**
+ * Detect movements by comparing previous and current level states.
+ * Uses maximum bipartite matching to optimally pair old positions with new positions.
+ * Returns array of: { objectIndex, fromPosIndex, toPosIndex }
+ */
+function detectMovements() {
+    if (!previousLevelState || !curLevel || !curLevel.objects) return [];
+
+    const oldMap = buildObjectPositionMap(
+        previousLevelState.objects,
+        previousLevelState.width,
+        previousLevelState.height
+    );
+    const newMap = buildObjectPositionMap(
+        curLevel.objects,
+        curLevel.width,
+        curLevel.height
+    );
+
+    const movements = [];
+
+    // For each object type, find maximum bipartite matching between old and new positions.
+    // Old positions form the left partition, new positions form the right partition.
+    // Edges connect positions that are the same cell or side-by-side neighbors.
+    for (const objectIndex in newMap) {
+        const oldPositions = oldMap[objectIndex] || [];
+        const newPositions = newMap[objectIndex];
+
+        if (oldPositions.length === 0) continue;  // Newly spawned objects
+
+        // Heuristic: detect simple push in a single direction.
+        // If each new position that wasn't old lines up with a disappeared position
+        // in a consistent direction, it's a push.
+        const oldPosSet = new Set(oldPositions);
+        const newPosSet = new Set(newPositions);
+        const disappeared = oldPositions.filter(p => !newPosSet.has(p));
+        const appeared = newPositions.filter(p => !oldPosSet.has(p));
+
+        const width = curLevel.width;
+        const height = curLevel.height;
+
+        if (disappeared.length > 0 && disappeared.length === appeared.length) {
+            // Check if all appeared positions are offset in the same direction from disappeared.
+            // The distance can be greater than 1 (e.g., pushing a row of 2 crates makes distance 2).
+            let consistentPush = true;
+            let pushDx = null;
+            let pushDy = null;
+
+            // Sort both arrays to pair them up
+            const disappearedSorted = [...disappeared].sort((a, b) => a - b);
+            const appearedSorted = [...appeared].sort((a, b) => a - b);
+
+            for (let i = 0; i < disappearedSorted.length; i++) {
+                const oldPos = disappearedSorted[i];
+                const newPos = appearedSorted[i];
+                const oldX = (oldPos / height) | 0;
+                const oldY = oldPos % height;
+                const newX = (newPos / height) | 0;
+                const newY = newPos % height;
+                const dx = newX - oldX;
+                const dy = newY - oldY;
+
+                // Must be purely horizontal or purely vertical (not diagonal, not zero)
+                if ((dx === 0) === (dy === 0)) {
+                    consistentPush = false;
+                    break;
+                }
+
+                // Normalize to unit direction
+                const unitDx = dx === 0 ? 0 : (dx > 0 ? 1 : -1);
+                const unitDy = dy === 0 ? 0 : (dy > 0 ? 1 : -1);
+
+                if (pushDx === null) {
+                    pushDx = unitDx;
+                    pushDy = unitDy;
+                } else if (unitDx !== pushDx || unitDy !== pushDy) {
+                    consistentPush = false;
+                    break;
+                }
+            }
+
+            if (consistentPush && pushDx !== null) {
+                // It's a simple push - move only objects along the disappearance/appearance lines
+                // For each pair, trace from disappearance to appearance and move those objects
+                for (let i = 0; i < disappearedSorted.length; i++) {
+                    const startPos = disappearedSorted[i];
+                    const endPos = appearedSorted[i];
+                    const startX = (startPos / height) | 0;
+                    const startY = startPos % height;
+                    const endX = (endPos / height) | 0;
+                    const endY = endPos % height;
+
+                    // Walk from start to end (exclusive of end, which is the new position)
+                    let x = startX;
+                    let y = startY;
+                    while (x !== endX || y !== endY) {
+                        const oldPos = y + x * height;
+                        const newX = x + pushDx;
+                        const newY = y + pushDy;
+                        const newPos = newY + newX * height;
+
+                        if (oldPosSet.has(oldPos) && newPosSet.has(newPos)) {
+                            movements.push({
+                                objectIndex: parseInt(objectIndex),
+                                fromPosIndex: oldPos,
+                                toPosIndex: newPos
+                            });
+                        }
+
+                        x += pushDx;
+                        y += pushDy;
+                    }
+                }
+                continue;  // Skip the general matching algorithm
+            }
+        }
+
+        // Build index mappings for the bipartite graph
+        const newPosToIdx = new Map();
+        newPositions.forEach((pos, idx) => newPosToIdx.set(pos, idx));
+
+        // Build adjacency lists:
+        // - adjStay[oldIdx] = [newIdx] if the cell stays in place (marked/preferred edges)
+        // - adj[oldIdx] = [newIdx, ...] for all reachable new positions
+        const adjStay = [];
+        const adj = oldPositions.map((oldPos, oldIdx) => {
+            const oldX = (oldPos / previousLevelState.height) | 0;
+            const oldY = oldPos % previousLevelState.height;
+
+            const neighbors = [];
+            // Check same cell (marked edge - preferred)
+            if (newPosSet.has(oldPos)) {
+                const stayIdx = newPosToIdx.get(oldPos);
+                adjStay[oldIdx] = [stayIdx];
+                neighbors.push(stayIdx);
+            } else {
+                adjStay[oldIdx] = [];
+            }
+
+            // Check 4 adjacent cells
+            const offsets = [
+                [-1, 0],  // left
+                [1, 0],   // right
+                [0, -1],  // up
+                [0, 1],   // down
+            ];
+
+            for (const [dx, dy] of offsets) {
+                const newX = oldX + dx;
+                const newY = oldY + dy;
+                if (newX >= 0 && newX < width && newY >= 0 && newY < height) {
+                    const newPos = newY + newX * height;
+                    if (newPosSet.has(newPos)) {
+                        neighbors.push(newPosToIdx.get(newPos));
+                    }
+                }
+            }
+            return neighbors;
+        });
+
+        // Kuhn's algorithm (Hungarian algorithm) for maximum bipartite matching.
+        // matchNew[newIdx] = oldIdx that is matched to it, or -1 if unmatched.
+        // matchOld[oldIdx] = newIdx that is matched to it, or -1 if unmatched.
+        const matchNew = new Array(newPositions.length).fill(-1);
+        const matchOld = new Array(oldPositions.length).fill(-1);
+
+        // Try to find an augmenting path starting from oldIdx using DFS.
+        function tryAugment(oldIdx, visited) {
+            for (const newIdx of adj[oldIdx]) {
+                if (visited[newIdx]) continue;
+                visited[newIdx] = true;
+
+                const currentMatch = matchNew[newIdx];
+
+                // If unmatched, we can take it
+                if (currentMatch === -1) {
+                    matchNew[newIdx] = oldIdx;
+                    matchOld[oldIdx] = newIdx;
+                    return true;
+                }
+
+                // Try to find alternative augmenting path for current match
+                if (tryAugment(currentMatch, visited)) {
+                    matchNew[newIdx] = oldIdx;
+                    matchOld[oldIdx] = newIdx;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Phase 0: Handle deletions by pre-excluding old objects that can't stay in place.
+        // If there are more old objects than new, some must be deleted.
+        // Prefer deleting objects that have no stay-in-place option.
+        const deletions = oldPositions.length - newPositions.length;
+        const excluded = new Array(oldPositions.length).fill(false);
+        if (deletions > 0) {
+            let toDelete = deletions;
+            for (let oldIdx = 0; oldIdx < oldPositions.length && toDelete > 0; oldIdx++) {
+                if (adjStay[oldIdx].length === 0) {
+                    excluded[oldIdx] = true;
+                    toDelete--;
+                }
+            }
+        }
+
+        // Phase 1: Find maximum matching using all edges.
+        for (let oldIdx = 0; oldIdx < oldPositions.length; oldIdx++) {
+            if (excluded[oldIdx]) continue;  // Skip pre-excluded deletions
+            const visited = new Array(newPositions.length).fill(false);
+            tryAugment(oldIdx, visited);
+        }
+
+        // Phase 2: Improve matching by upgrading to stay-in-place edges where possible.
+        // Iterate until no improvement found (greedy single-swap can miss global optimum).
+        // For each swap, compare total stay count before/after to decide if we keep it.
+
+        // Helper to count total stay edges in current matching
+        function countStayEdges() {
+            let count = 0;
+            for (let i = 0; i < oldPositions.length; i++) {
+                if (adjStay[i].length > 0 && matchOld[i] === adjStay[i][0]) count++;
+            }
+            return count;
+        }
+
+        // Track stay edges that were locked in during Phase 2 improvements.
+        // Only these should be protected from being disrupted by later augmentations.
+        const lockedStayEdges = new Set();
+
+        let improved = true;
+        while (improved) {
+            improved = false;
+
+            for (let l = 0; l < oldPositions.length; l++) {
+                if (adjStay[l].length === 0) continue;  // No stay edge for this node
+                const r_stay = adjStay[l][0];
+                if (matchOld[l] === r_stay) continue;  // Already using stay edge
+
+                const l_prime = matchNew[r_stay];  // Who currently has r_stay (-1 if free)
+                const r_prime = matchOld[l];  // l's current match (-1 if unmatched)
+
+                // Count stay edges before swap
+                const stayCountBefore = countStayEdges();
+
+                if (l_prime === -1) {
+                    // r_stay is unmatched - just reassign l to use its stay edge
+                    if (r_prime !== -1) matchNew[r_prime] = -1;
+                    matchOld[l] = r_stay;
+                    matchNew[r_stay] = l;
+                    // This always improves (we gain a stay edge, lose nothing)
+                    lockedStayEdges.add(r_stay);
+                    improved = true;
+                    continue;
+                }
+
+                // r_stay is matched to l_prime. Try to swap: give l the stay edge,
+                // and find a new match for l_prime.
+
+                // Save state for potential revert
+                const savedMatchNew = matchNew.slice();
+                const savedMatchOld = matchOld.slice();
+
+                // Do the swap
+                if (r_prime !== -1) matchNew[r_prime] = -1;
+                matchOld[l] = r_stay;
+                matchNew[r_stay] = l;
+                matchOld[l_prime] = -1;
+
+                // Try to find a new match for l_prime
+                // Mark only stay edges that were locked in during Phase 2 as visited,
+                // to prevent augmenting paths from disrupting confirmed improvements.
+                const visited = new Array(newPositions.length).fill(false);
+                for (const lockedIdx of lockedStayEdges) {
+                    visited[lockedIdx] = true;
+                }
+                // Also protect the edge we just claimed
+                visited[r_stay] = true;
+
+                if (tryAugment(l_prime, visited)) {
+                    // Swap succeeded - check if total stay count improved
+                    const stayCountAfter = countStayEdges();
+                    if (stayCountAfter > stayCountBefore) {
+                        lockedStayEdges.add(r_stay);
+                        improved = true;  // Keep the swap
+                    } else {
+                        // No improvement - revert
+                        for (let i = 0; i < matchNew.length; i++) matchNew[i] = savedMatchNew[i];
+                        for (let i = 0; i < matchOld.length; i++) matchOld[i] = savedMatchOld[i];
+                    }
+                } else {
+                    // Can't find match for l_prime - revert
+                    for (let i = 0; i < matchNew.length; i++) matchNew[i] = savedMatchNew[i];
+                    for (let i = 0; i < matchOld.length; i++) matchOld[i] = savedMatchOld[i];
+                }
+            }
+        }
+
+        // Extract movements from the matching
+        for (let newIdx = 0; newIdx < newPositions.length; newIdx++) {
+            const oldIdx = matchNew[newIdx];
+            if (oldIdx !== -1) {
+                const oldPos = oldPositions[oldIdx];
+                const newPos = newPositions[newIdx];
+
+                if (oldPos !== newPos) {  // Object moved
+                    movements.push({
+                        objectIndex: parseInt(objectIndex),
+                        fromPosIndex: oldPos,
+                        toPosIndex: newPos
+                    });
+                }
+            }
+        }
+    }
+
+    return movements;
+}
+
+/**
+ * Animation loop for smooth movement transitions
+ */
+function animate3D() {
+    if (!isAnimating3D || !renderer3d || !scene3d || !camera3d) {
+        isAnimating3D = false;
+        return;
+    }
+
+    const elapsed = performance.now() - animationStartTime;
+    const t = Math.min(elapsed / animationDuration, 1);
+
+    // Smooth easing function (ease-out cubic)
+    const easeT = 1 - Math.pow(1 - t, 3);
+
+    // Temporary matrix for instance updates
+    const matrix = new THREE.Matrix4();
+
+    // Update all animated instance positions
+    for (const anim of animatedMeshes) {
+        const x = anim.startX + (anim.endX - anim.startX) * easeT;
+        const z = anim.startZ + (anim.endZ - anim.startZ) * easeT;
+        matrix.setPosition(x, anim.y, z);
+        anim.mesh.setMatrixAt(anim.instanceIndex, matrix);
+        anim.mesh.instanceMatrix.needsUpdate = true;
+    }
+
+    // Render the scene
+    renderer3d.render(scene3d, camera3d);
+
+    if (t < 1) {
+        animationFrameId = requestAnimationFrame(animate3D);
+    } else {
+        isAnimating3D = false;
+        animatedMeshes = [];
+    }
+}
+
+/**
+ * Add a sprite instance at the given grid position.
+ * Uses instanced rendering for performance.
+ * @param {number} spriteIndex - Index into sprites array
+ * @param {number} gridX - X position in level grid (0-indexed from visible area)
+ * @param {number} gridY - Y position in level grid (0-indexed from visible area)
+ * @param {number} layer - Layer (Y height) for multiple objects
+ * @param {number} visibleWidth - Width of visible area
+ * @param {number} visibleHeight - Height of visible area
+ * @param {object} animFrom - Optional {gridX, gridY} for animation start position
+ */
+function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleHeight, animFrom) {
+    const geometry = getOrCreateSpriteGeometry(spriteIndex);
+    if (!geometry) return;
+
+    const sprite = objectSprites[spriteIndex];
+    const obj = state.objects[state.idDict[spriteIndex]];
+
+    // Calculate cell size
+    const cellSizeX = state.sprite_size * CUBE_SIZE;
+    const cellSizeZ = state.sprite_size * CUBE_SIZE;
+
+    // Center the level around origin
+    const totalWidth = visibleWidth * cellSizeX;
+    const totalHeight = visibleHeight * cellSizeZ;
+
+    const spriteOffset = obj.spriteoffset || { x: 0, y: 0 };
+    const baseX = gridX * cellSizeX - totalWidth / 2 + spriteOffset.x * CUBE_SIZE;
+    const baseZ = gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length) + spriteOffset.y * CUBE_SIZE;
+    const baseY = layer * SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size;
+
+    // Get or create the InstancedMesh for this sprite
+    let mesh = instancedMeshes[spriteIndex];
+    if (!mesh) {
+        // Create new InstancedMesh with generous max count
+        // Use glass material with transmission based on min alpha if sprite has transparency
+        const maxInstances = 1000;
+        const transmission = spriteTransmission[spriteIndex];
+        let material = spriteMaterial;
+        if (transmission > 0) {
+            // Create per-sprite glass material with transmission based on alpha
+            // Lower alpha = higher transmission (more transparent)
+            if (!spriteGlassMaterials[spriteIndex]) {
+                spriteGlassMaterials[spriteIndex] = new THREE.MeshPhysicalMaterial({
+                    vertexColors: true,
+                    roughness: 0.0,
+                    metalness: 0.0,
+                    transmission: transmission,
+                    thickness: 0.0,
+                    ior: 1.0,
+                    transparent: true,
+                    side: THREE.DoubleSide,
+                });
+            }
+            material = spriteGlassMaterials[spriteIndex];
+        }
+        mesh = new THREE.InstancedMesh(geometry, material, maxInstances);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.count = 0;
+        instancedMeshes[spriteIndex] = mesh;
+        instanceCounts[spriteIndex] = 0;
+        levelGroup.add(mesh);
+    }
+
+    // Get next instance index
+    const instanceIndex = instanceCounts[spriteIndex];
+    instanceCounts[spriteIndex]++;
+
+    // Ensure we don't exceed max instances
+    if (instanceIndex >= mesh.instanceMatrix.count) {
+        console.warn('Max instances exceeded for sprite', spriteIndex);
+        return;
+    }
+
+    // Create transformation matrix for this instance
+    const matrix = new THREE.Matrix4();
+
+    if (animFrom) {
+        // Start at animation origin (with same spriteoffset as end position)
+        const startBaseX = animFrom.gridX * cellSizeX - totalWidth / 2 + spriteOffset.x * CUBE_SIZE;
+        const startBaseZ = animFrom.gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length) + spriteOffset.y * CUBE_SIZE;
+        matrix.setPosition(startBaseX, baseY, startBaseZ);
+
+        // Track for animation
+        animatedMeshes.push({
+            mesh: mesh,
+            instanceIndex: instanceIndex,
+            startX: startBaseX,
+            startZ: startBaseZ,
+            endX: baseX,
+            endZ: baseZ,
+            y: baseY
+        });
+    } else {
+        matrix.setPosition(baseX, baseY, baseZ);
+    }
+
+    mesh.setMatrixAt(instanceIndex, matrix);
+
+}
+
+/**
+ * Main 3D redraw function - replaces the 2D redraw() when in 3D mode
+ */
+function redraw3D() {
+    const render3DEnabled = !!(state && state.metadata && state.metadata.render_height);
+    window.use3DRenderer = render3DEnabled;
+
+    const canvas2d = document.getElementById('gameCanvas');
+    const canvas3d = document.getElementById('gameCanvas3D');
+
+    if (!window.use3DRenderer) {
+        if (canvas2d) canvas2d.style.display = 'block';
+        if (canvas3d) canvas3d.style.display = 'none';
+        return false;
+    }
+
+    if (!renderer3d || !scene3d || !camera3d) {
+        if (!init3DRenderer()) {
+            if (canvas2d) canvas2d.style.display = 'block';
+            if (canvas3d) canvas3d.style.display = 'none';
+            return false;
+        }
+    }
+
+    // Fall back to 2D for text screens and level editor mode.
+    if (textMode || levelEditorOpened) {
+        if (canvas2d) canvas2d.style.display = 'block';
+        if (canvas3d) canvas3d.style.display = 'none';
+        return false;
+    } else {
+        // Show 3D canvas, hide 2D canvas for gameplay.
+        if (canvas2d) canvas2d.style.display = 'none';
+        if (canvas3d) canvas3d.style.display = 'block';
+    }
+
+    // Mark all cached meshes as not in use; we'll mark them as used when we process them
+    beginRedraw3D();
+
+    // Set background color
+    if (state && state.bgcolor) {
+        renderer3d.setClearColor(new THREE.Color(state.bgcolor), 1);
+    }
+
+    // Get current level data
+    if (!curLevel || !curLevel.width || !curLevel.height) {
+        renderer3d.render(scene3d, camera3d);
+        return true;
+    }
+
+    // Detect level changes and clear cache when level changes
+    const currentLevelId = typeof curLevelTarget !== 'undefined' ? curLevelTarget : null;
+    if (currentLevelId !== lastLevelId) {
+        clearScene3D();
+        lastLevelId = currentLevelId;
+    }
+
+    // Detect recompilation (sprites array reference changes)
+    if (typeof objectSprites !== 'undefined' && objectSprites !== lastSpritesRef) {
+        clearScene3D();
+        lastSpritesRef = objectSprites;
+    }
+
+    // Calculate visible area (handle flickscreen/zoomscreen)
+    let mini = 0;
+    let maxi = screenwidth;
+    let minj = 0;
+    let maxj = screenheight;
+
+    if (flickscreen) {
+        var playerPositions = getPlayerPositions();
+        if (playerPositions.length > 0) {
+            var playerPosition = playerPositions[0];
+            var px = (playerPosition / curLevel.height) | 0;
+            var py = (playerPosition % curLevel.height) | 0;
+            var screenx = (px / screenwidth) | 0;
+            var screeny = (py / screenheight) | 0;
+            mini = screenx * screenwidth;
+            minj = screeny * screenheight;
+            maxi = Math.min(mini + screenwidth, curLevel.width);
+            maxj = Math.min(minj + screenheight, curLevel.height);
+        }
+    } else if (zoomscreen) {
+        var playerPositions = getPlayerPositions();
+        if (playerPositions.length > 0) {
+            var playerPosition = playerPositions[0];
+            var px = (playerPosition / curLevel.height) | 0;
+            var py = (playerPosition % curLevel.height) | 0;
+            mini = Math.max(Math.min(px - ((screenwidth / 2) | 0), curLevel.width - screenwidth), 0);
+            minj = Math.max(Math.min(py - ((screenheight / 2) | 0), curLevel.height - screenheight), 0);
+            maxi = Math.min(mini + screenwidth, curLevel.width);
+            maxj = Math.min(minj + screenheight, curLevel.height);
+        }
+    }
+
+    // Update camera to center on visible area
+    const visibleWidth = maxi - mini;
+    const visibleHeight = maxj - minj;
+    const baseCameraDistance = Math.max(visibleWidth / camera3d.aspect, visibleHeight) * state.sprite_size * CAMERA_DISTANCE;
+    cameraDistance = baseCameraDistance * cameraZoomFactor;
+    updateCameraPosition();
+
+    // Update shadow camera to cover the level area
+    if (keyLight) {
+        const shadowSize = Math.max(visibleWidth, visibleHeight) * state.sprite_size * 0.7;
+
+        // DirectionalLight uses orthographic shadow camera - update coverage bounds
+        keyLight.shadow.camera.near = 0.5;
+        keyLight.shadow.camera.far = shadowSize * 12 * SPRITE_HEIGHT;
+        keyLight.shadow.camera.left = -shadowSize;
+        keyLight.shadow.camera.right = shadowSize;
+        keyLight.shadow.camera.top = shadowSize;
+        keyLight.shadow.camera.bottom = -shadowSize;
+        keyLight.shadow.camera.updateProjectionMatrix();
+
+        // Position key light relative to level center (front-right-above)
+        keyLight.position.set(shadowSize * 0.8, shadowSize * 3 * SPRITE_HEIGHT, shadowSize * 0.6);
+        keyLight.target.position.set(0, 0, 0);
+        keyLight.intensity = 1.5;
+
+        // Update fill light position (front-left)
+        if (fillLight) {
+            fillLight.position.set(-shadowSize * 0.6, shadowSize * 0.5, shadowSize * 0.4);
+        }
+    }
+
+    // Create ground plane to receive shadows
+    if (!groundPlane) {
+        const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
+        // Use MeshStandardMaterial with subtle color for visible ground with shadows
+        const groundMaterial = new THREE.MeshStandardMaterial({
+            color: 0x333333,
+            roughness: 0.9,
+            metalness: 0.0,
+            transparent: true,
+            opacity: 0.6
+        });
+        groundPlane = new THREE.Mesh(groundGeometry, groundMaterial);
+        groundPlane.rotation.x = -Math.PI / 2;  // Lay flat
+        groundPlane.position.y = -0.5;  // Just below the cubes
+        groundPlane.receiveShadow = true;
+        scene3d.add(groundPlane);
+    }
+
+    // Detect movements for animation
+    const movements = detectMovements();
+
+    // Build a map of movements: toPosIndex -> {objectIndex, fromX, fromY}
+    const movementMap = {};
+    for (const m of movements) {
+        const fromX = (m.fromPosIndex / previousLevelState.height) | 0;
+        const fromY = m.fromPosIndex % previousLevelState.height;
+        const key = `${m.toPosIndex}_${m.objectIndex}`;
+        movementMap[key] = { fromX, fromY };
+    }
+
+    // Render all objects in the visible area
+
+    // Helper function to find which collision layer group an object belongs to
+    function getCollisionGroupIndex(objectId) {
+        for (let g = 0; g < state.collisionLayerGroups.length; g++) {
+            const group = state.collisionLayerGroups[g];
+            if (objectId >= group.firstObjectNo && objectId < group.firstObjectNo + group.numObjects) {
+                return g;
+            }
+        }
+        return -1;
+    }
+
+    for (let i = mini; i < maxi; i++) {
+        for (let j = minj; j < maxj; j++) {
+            const posIndex = j + i * curLevel.height;
+            const posMask = curLevel.getCellInto(posIndex, _o12);
+            let height = 0;
+            let lastGroupIndex = -1;
+
+            for (let k = 0; k < state.objectCount; k++) {
+                if (posMask.get(k) == 0) continue;
+
+                // Always reserve height for present objects, including fully transparent ones.
+                const groupIndex = getCollisionGroupIndex(k);
+                if (state.collisionLayerGroups.length <= 1 || groupIndex !== lastGroupIndex) {
+                    height += 1;
+                } else {
+                    height += 0.0;
+                }
+                lastGroupIndex = groupIndex;
+
+                const hasGeometry = !!getOrCreateSpriteGeometry(k);
+                if (!hasGeometry) continue;
+
+                // Check if this object moved here
+                const movementKey = `${posIndex}_${k}`;
+                let animFrom = null;
+
+                if (movementMap[movementKey]) {
+                    const m = movementMap[movementKey];
+                    // Convert from absolute coords to visible-area relative coords
+                    animFrom = {
+                        gridX: m.fromX - mini,
+                        gridY: m.fromY - minj
+                    };
+                }
+
+                createSprite3D(k, i - mini, j - minj, height, visibleWidth, visibleHeight, animFrom);
+            }
+        }
+    }
+
+    // Clear the previous state snapshot
+    previousLevelState = null;
+
+    // Remove meshes that are no longer needed
+    endRedraw3D();
+
+    // Start animation if we have movements
+    if (animatedMeshes.length > 0) {
+        isAnimating3D = true;
+        animationStartTime = performance.now();
+        animate3D();
+    } else {
+        // No animation, just render once
+        renderer3d.render(scene3d, camera3d);
+    }
+
+    return true;
+}
+
+/**
+ * Toggle between 2D and 3D rendering
+ */
+function toggle3DRenderer() {
+    window.use3DRenderer = !window.use3DRenderer;
+
+    const canvas2d = document.getElementById('gameCanvas');
+    const canvas3d = document.getElementById('gameCanvas3D');
+
+    if (window.use3DRenderer) {
+        if (!renderer3d) {
+            if (!init3DRenderer()) {
+                // Init failed, stay in 2D mode
+                window.use3DRenderer = false;
+                return;
+            }
+        }
+        if (canvas2d) canvas2d.style.display = 'none';
+        if (canvas3d) canvas3d.style.display = 'block';
+    } else {
+        if (canvas2d) canvas2d.style.display = 'block';
+        if (canvas3d) canvas3d.style.display = 'none';
+    }
+
+    // Trigger redraw
+    if (typeof canvasResize === 'function') {
+        canvasResize();
+    } else if (typeof redraw === 'function') {
+        redraw();
+    }
+
+    console.log('Rendering mode: ' + (window.use3DRenderer ? '3D' : '2D'));
+}
+
+function reset3DCamera() {
+    cameraAngleX = 1.2;
+    cameraAngleY = 0.0;
+    cameraZoomFactor = 1.0;
+    isRotatingCamera = false;
+    updateCameraPosition();
+}
+
+document.addEventListener('psplusLevelLoaded', function() {
+    reset3DCamera();
+});
+
+document.addEventListener('psplusLevelRestarted', function() {
+    reset3DCamera();
+});
+
+// Allow access from other files.
+window.redraw3D = redraw3D;
+window.snapshotLevelState = snapshotLevelState;
+window.reset3DCamera = reset3DCamera;
+window.use3DRenderer = false;
 </script>
 <script>
 var onLevelRestarted = new Event("levelRestarted");
@@ -8710,6 +10109,7 @@ function loadLevelFromLevelDat(state,leveldat,randomseed,clearinputhistory) {
   	state.metadata = deepClone(state.default_metadata);
     againing=false;
 	suppressInput = false;
+	reset3DCameraIfAvailable();
     if (leveldat===undefined) {
     	consolePrint("Trying to access a level that doesn't exist.",true);
 		curLevelNo = 0;  // bad level from storage, needs to be reset in case of skip_title_screen
@@ -8972,6 +10372,12 @@ function tryPlayCloseMessageSound(){
 var backups=[];
 var restartTarget;
 
+function reset3DCameraIfAvailable() {
+	if (typeof window !== 'undefined' && typeof window.reset3DCamera === 'function') {
+		window.reset3DCamera();
+	}
+}
+
 // create backup of level data for undo, restart, etc
 function backupLevel() {
 	const ret = level4Serialization();
@@ -9047,6 +10453,7 @@ function setGameState(_state, command, randomseed) {
     switch(command[0]){
     	case "restart":
     	{
+			reset3DCameraIfAvailable();
 		    winning=false;
 		    timer=0;
 		    titleScreen=true;
@@ -9434,6 +10841,7 @@ function DoRestart(force) {
 
 	restoreLevel(restartTarget, true);
 	initSmoothCamera();
+	reset3DCameraIfAvailable();
 	tryPlayRestartSound();
 	document.dispatchEvent(new CustomEvent("psplusLevelRestarted", {detail: curLevelNo}));
 
@@ -12302,6 +13710,7 @@ var codeMirrorFn = function() {
     const reg_sounddirectionindicators = /^(up|down|left|right|horizontal|vertical|orthogonal)\b/i;
 
     const keyword_array = [ 'checkpoint', 'objects', 'collisionlayers', 'legend', 'sounds', 'rules', 'winconditions', 'levels',
+        'layer',
         '|', '[', ']', 'up', 'down', 'left', 'right', 'late', 'rigid', '^', 'v', '>', '<', 'no', 'randomdir', 'random', 'horizontal', 'vertical',
         'any', 'all', 'no', 'some', 'moving', 'stationary', 'parallel', 'perpendicular', 'action', 'message', 'move', 
         'create', 'destroy', 'cantmove', 'sfx0', 'sfx1', 'sfx2', 'sfx3', 'Sfx4', 'sfx5', 'sfx6', 'sfx7', 'sfx8', 'sfx9', 'sfx10', 
@@ -12310,7 +13719,7 @@ var codeMirrorFn = function() {
     const prelude_keywords = ['allow_undo_level', 'auto_level_titles', 'case_sensitive', 'continue_is_level_select', 'debug', 'enable_pause', 
         'level_select', 'level_select_lock', 
         'mouse_clicks', 'noaction', 'nokeyboard', 'norepeat_action', 'norestart', 'noundo', 'require_player_movement', 
-        'run_rules_on_level_start', 'runtime_metadata_twiddling', 'runtime_metadata_twiddling_debug', 'scanline', 
+        'run_rules_on_level_start', 'runtime_metadata_twiddling', 'runtime_metadata_twiddling_debug', 'scanline', 'render_height',
         'skip_title_screen', 'smoothscreen_debug', 'status_line', 'throttle_movement', 'verbose_logging'];
     const prelude_param_text = ['title', 'author', 'homepage', 'custom_font', 'text_controls', 'text_message_continue', 'debug_switch', 'export_options' ];
     const prelude_param_number = ['again_interval', 'animate_interval', 'font_size', 'key_repeat_interval', 
@@ -12620,7 +14029,7 @@ var codeMirrorFn = function() {
             let kind = 'ERROR';
             const args = [];
             if (token = lexer.match(/^[a-z_]+/i, true)) {
-                if (state.metadata_lines[ident]) {
+                if (state.metadata_lines[token]) {
                     var otherline = state.metadata_lines[token];
                     logWarning(`You've already defined a "${errorCase(token)}" in the prelude on line ${htmlJump(otherline)}.`, state.lineNumber);
                     lexer.pushToken(token, 'ERROR');
@@ -12641,7 +14050,7 @@ var codeMirrorFn = function() {
 
                     while (!lexer.matchEol()) {
                         if (token = lexer.match(/^\S+/, true)) {
-                            kind = (token in colorPalettes.arnecolors) ? 'COLOR COLOR-' + errorCase(token)
+                            kind = (token in colorPalettes.arnecolors) ? 'COLOR COLOR-' + token.toUpperCase()
                                 : (token === "transparent") ? 'COLOR FADECOLOR'
                                 : token.match(/^#[0-9a-fA-F]+$/) ? 'MULTICOLOR' + token
                                 : 'METADATATEXT';
@@ -13835,6 +15244,7 @@ var codeMirrorFn = function() {
     //  line ::= MESSAGE <text>
     //         | SECTION <text>
     //         | GOTO <text>
+    //         | LAYER
     //         | ( <levelchar>+ [ WS comment ] )+
     function parseLevel(stream, state) {
         const lexer = new Lexer(stream, state);
@@ -13851,9 +15261,9 @@ var codeMirrorFn = function() {
         function getTokens() {
             let token
             // start of parse
-            if (token = lexer.match(/^(goto|level|link|message|section|title|input)/i, true)) { // allow omision of whitespace (with no warning!)
+            if (token = lexer.match(/^(goto|level|link|message|section|title|input|layer)/i, true)) { // allow omision of whitespace (with no warning!)
                 symbols.start = token;
-                lexer.pushToken(token, `${errorCase(token)}_VERB`);
+                lexer.pushToken(token, `${token.toUpperCase()}_VERB`);
 
                 if (token == 'link') {
                     if (!(token = lexer.match(reg_objectname, !state.case_sensitive))) 
@@ -13900,7 +15310,7 @@ var codeMirrorFn = function() {
                 state.levels.pop();
                 toplevel = null;
             }
-            const cmds = [ 'goto', 'level', 'link', 'message', 'section', 'title', 'input' ];
+            const cmds = [ 'goto', 'level', 'link', 'message', 'section', 'title', 'input', 'layer' ];
             if (cmds.includes(symbols.start))
                 state.levels.push([ symbols.start, symbols.text, state.lineNumber, symbols.link ]);
             else {
@@ -14271,6 +15681,7 @@ var codeMirrorFn = function() {
 
         },
         startState: function() {
+            caseSensitive = false;
             return {
                 objects: {},
 
@@ -14335,10 +15746,8 @@ var codeMirrorFn = function() {
 };
 
 window.CodeMirror.defineMode('puzzle', codeMirrorFn);
-
 </script>
 <script>
-
 'use strict';
 
 // static data used here and elsewhere
@@ -15304,6 +16713,54 @@ function levelsToArray(state) {
     //const links = {};
     //const targets = new Set();
     let section, title, description, gotoFlag, input;
+    let expectLayerGrid = false;
+    let expectLayerLine = null;
+    const layerObjectIds = state.collisionLayers.map(layer => layer.map(name => state.objects[name].id));
+
+    const isGridLevel = level => level instanceof Level;
+
+    function getObjectOnLayer(cell, layerIndex) {
+        for (const id of layerObjectIds[layerIndex]) {
+            if (cell.get(id))
+                return id;
+        }
+        return -1;
+    }
+
+    function mergeLevelLayer(baseLevel, overlayLevel, lineNumber) {
+        if (baseLevel.width !== overlayLevel.width || baseLevel.height !== overlayLevel.height) {
+            logError(`LAYER map size mismatch. Expected ${baseLevel.width}x${baseLevel.height}, got ${overlayLevel.width}x${overlayLevel.height}.`, lineNumber);
+            return false;
+        }
+
+        for (let i = 0; i < baseLevel.n_tiles; i++) {
+            const baseCell = baseLevel.getCell(i);
+            const overlayCell = overlayLevel.getCell(i);
+
+            for (let layerIndex = 0; layerIndex < state.layerMasks.length; layerIndex++) {
+                const baseId = getObjectOnLayer(baseCell, layerIndex);
+                const overlayId = getObjectOnLayer(overlayCell, layerIndex);
+                if (overlayId === -1 || overlayId === baseId)
+                    continue;
+
+                // Treat background from overlay as transparent for layering.
+                if (overlayId === state.backgroundid && baseId !== -1 && baseId !== state.backgroundid)
+                    continue;
+
+                if (baseId !== -1 && baseId !== state.backgroundid && overlayId !== state.backgroundid) {
+                    const baseName = errorCase(state.idDict[baseId]);
+                    const overlayName = errorCase(state.idDict[overlayId]);
+                    logError(`LAYER conflict at map cell ${i + 1}: "${overlayName}" overlaps "${baseName}" on the same collision layer.`, lineNumber);
+                    return false;
+                }
+
+                baseCell.iclear(state.layerMasks[layerIndex]);
+                baseCell.ibitset(overlayId);
+            }
+            baseLevel.setCell(i, baseCell);
+        }
+        return true;
+    }
     
     if (state.levels.at(-1).length == 0)
         state.levels.pop();
@@ -15313,6 +16770,11 @@ function levelsToArray(state) {
     // parse: state.levels.push([ symbols.start, symbols.text, state.lineNumber, symbols.link ]);
     state.levels.forEach(level => {
         title ||= `Level ${levelNo}`;
+        if (typeof level[0] === 'string' && level[0] !== 'layer' && expectLayerGrid) {
+            logError('LAYER must be followed immediately by map rows.', level[2]);
+            expectLayerGrid = false;
+            expectLayerLine = null;
+        }
 		if (level[0] == 'message') {
             if (gotoFlag) logWarning('Message unreachable due to previous GOTO.', level[2]);
             const wrapTest = wordwrap(level[1], 35);  // todo: 35
@@ -15347,18 +16809,46 @@ function levelsToArray(state) {
             });
 		} else if (level[0] == 'input') {
             input = level[1];
+		} else if (level[0] == 'layer') {
+            if (level[1] && level[1].trim().length > 0)
+                logWarning(`LAYER does not take text, so "${level[1].trim()}" is ignored.`, level[2]);
+            if (expectLayerGrid) {
+                logError('LAYER cannot appear twice in a row without map rows in between.', level[2]);
+            } else if (!isGridLevel(levels.at(-1))) {
+                logError('LAYER must follow a map in the LEVELS section.', level[2]);
+            } else {
+                expectLayerGrid = true;
+                expectLayerLine = level[2];
+            }
 		} else {
             if (gotoFlag && links.length == 0) 
                 logWarning('Level unreachable due to previous GOTO.', level[0]);
             level[1] = section; // todo: fix it
-			levels.push(levelFromString(state, level));
-            levels.at(-1).title = title;
-            levels.at(-1).linksTop = links.length;
-            if (input) levels.at(-1).input = input;
-            ++levelNo;
-            title = null;
+            const compiledLevel = levelFromString(state, level);
+            if (expectLayerGrid && isGridLevel(levels.at(-1))) {
+                if (!mergeLevelLayer(levels.at(-1), compiledLevel, level[0])) {
+                    levels.push(compiledLevel);
+                    levels.at(-1).title = title;
+                    levels.at(-1).linksTop = links.length;
+                    if (input) levels.at(-1).input = input;
+                    ++levelNo;
+                    title = null;
+                }
+                expectLayerGrid = false;
+                expectLayerLine = null;
+            } else {
+			    levels.push(compiledLevel);
+                levels.at(-1).title = title;
+                levels.at(-1).linksTop = links.length;
+                if (input) levels.at(-1).input = input;
+                ++levelNo;
+                title = null;
+            }
 		}
 	});
+    if (expectLayerGrid) {
+        logError('LAYER must be followed by another map block.', expectLayerLine);
+    }
     links.forEach(link => {
         let index = -9999;
         if ((index = levels.findIndex(level => link.target == level.section)) != -1)
@@ -16715,6 +18205,7 @@ function rulesToMask(state) {
         layerTemplate.push(null);
     }
 
+    ruleLoop:
     for (var i = 0; i < state.rules.length; i++) {
         var rule = state.rules[i];
         for (var j = 0; j < rule.lhs.length; j++) {
@@ -16822,7 +18313,7 @@ function rulesToMask(state) {
                     }
                     state.rules.splice(i,1);
                     i--;
-                    continue;
+                    continue ruleLoop;
                 }
                 
                 if (rule.rhs.length === 0) {
@@ -18234,7 +19725,6 @@ function isSitelocked() {
 
     return true;
 }
-
 </script>
 <script>
 var keyRepeatTimer=0;
