@@ -9648,6 +9648,25 @@ function generateTitleScreen(hoverLine, scrollIncrement, selectLine) {
 		if (state.keyhint_color) 
 			lineColorOverride[n] = state.keyhint_color;
 	}
+	const getActionHint = () => {
+		if (state.metadata.noaction) {
+			return " X to select";
+		}
+		const keys = ["X"];
+		if (Array.isArray(state.actionKeyOrder) && state.actionKeyLabels) {
+			for (const keyCode of state.actionKeyOrder) {
+				const label = state.actionKeyLabels[keyCode];
+				if (!label) {
+					continue;
+				}
+				const upper = String(label).toUpperCase();
+				if (!keys.includes(upper)) {
+					keys.push(upper);
+				}
+			}
+		}
+		return ` ${keys.join(",")} to action`;
+	}
 	if (state.metadata.text_controls) {
 		const text = wordwrap(state.metadata.text_controls, TITLE_WIDTH, true);
 		text.slice(0, 3).forEach((t,x) => {
@@ -9656,7 +9675,7 @@ function generateTitleScreen(hoverLine, scrollIncrement, selectLine) {
 	} else {
 		const tclick = state.metadata.mouse_drag || state.metadata.mouse_rdrag ? " Click, Tap, or Drag to interact" : " Click or Tap to interact";
 		setImage(10, IsMouseGameInputEnabled() ? tclick : " Arrow keys or WASD to move");
-		setImage(11, (state.metadata.noaction ? " X to select" : " X to action") + (state.metadata.norestart ? "" : ", R to restart"));
+		setImage(11, getActionHint() + (state.metadata.norestart ? "" : ", R to restart"));
 		const tundo = IsMouseGameInputEnabled() ? " Z or Middle Mouse Button to undo" : " Z to undo";
 		setImage(12, (state.metadata.noundo ? " " : tundo));
 	}
@@ -12606,6 +12625,9 @@ function processLevelInput() {
 			DoRestart();
 		} else if (val==="tick") {
 			processInput(-1);
+		} else if (String(val).startsWith('actionkey,')) {
+			const args = String(val).split(',');
+			actionKeyInput(parseInt(args[1], 10));
 		} else {
 			processInput(dirNames.indexOf(val));
 		}
@@ -13735,7 +13757,7 @@ var codeMirrorFn = function() {
         'game_uri', 'level_title_style', 'show_level_title_in_menu', 
     ];
     const prelude_param_multi = [
-        'smoothscreen', 'puzzlescript', 'youtube', 'load_images', 'color_palette'
+        'smoothscreen', 'puzzlescript', 'youtube', 'load_images', 'color_palette', 'actionkey'
     ];
     const prelude_tables = [prelude_keywords, prelude_param_text, prelude_param_number, 
         prelude_param_single, prelude_param_multi];
@@ -14029,7 +14051,8 @@ var codeMirrorFn = function() {
             let kind = 'ERROR';
             const args = [];
             if (token = lexer.match(/^[a-z_]+/i, true)) {
-                if (state.metadata_lines[token]) {
+                const allowRepeatPrelude = token === 'actionkey';
+                if (state.metadata_lines[token] && !allowRepeatPrelude) {
                     var otherline = state.metadata_lines[token];
                     logWarning(`You've already defined a "${errorCase(token)}" in the prelude on line ${htmlJump(otherline)}.`, state.lineNumber);
                     lexer.pushToken(token, 'ERROR');
@@ -14127,6 +14150,11 @@ var codeMirrorFn = function() {
             } else if (ident == 'game_uri') {
                 logWarning(`Setting "${errorCase(ident)}" is an experimental Pattern:Script feature. Do not use.`,state.lineNumber);
                 return;
+            } else if (ident == 'actionkey') {
+                state.actionkey_specs = state.actionkey_specs || [];
+                state.actionkey_lines = state.actionkey_lines || [];
+                state.actionkey_specs.push(value[1]);
+                state.actionkey_lines.push(state.lineNumber);
             }
             state.metadata.push(...value);
         }
@@ -16544,6 +16572,127 @@ function generateExtraMembers(state) {
 }
 
 function generateExtraMembersPart2(state) {
+	function resolveObjectId(name, preludeTerm) {
+		if (!name) {
+			return null;
+		}
+		if (state.objects[name]) {
+			return state.objects[name].id;
+		}
+		if (name in state.synonymsDict) {
+			const n = state.synonymsDict[name];
+			return state.objects[n].id;
+		}
+		logError(`${name} object/alias has to be defined`, state.metadata_lines[preludeTerm]);
+		return null;
+	}
+
+	function parseActionKeyCode(token) {
+		if (!token) {
+			return null;
+		}
+		const t = token.toLowerCase();
+		if (/^\d+$/.test(t)) {
+			const code = parseInt(t, 10);
+			if (code >= 0 && code <= 255) {
+				return code;
+			}
+			return null;
+		}
+		if (t.length === 1) {
+			return t.toUpperCase().charCodeAt(0);
+		}
+		if (/^f\d{1,2}$/.test(t)) {
+			const n = parseInt(t.substring(1), 10);
+			if (n >= 1 && n <= 24) {
+				return 111 + n;
+			}
+			return null;
+		}
+		if (/^key[a-z]$/.test(t)) {
+			return t.charAt(3).toUpperCase().charCodeAt(0);
+		}
+		if (/^digit[0-9]$/.test(t)) {
+			return 48 + parseInt(t.charAt(5), 10);
+		}
+
+		const keyCodeMap = {
+			'left': 37,
+			'up': 38,
+			'right': 39,
+			'down': 40,
+			'space': 32,
+			'enter': 13,
+			'escape': 27,
+			'esc': 27,
+			'tab': 9,
+			'backspace': 8,
+			'delete': 46,
+			'insert': 45,
+			'home': 36,
+			'end': 35,
+			'pageup': 33,
+			'pgup': 33,
+			'pagedown': 34,
+			'pgdown': 34,
+			'minus': 189,
+			'-': 189,
+			'plus': 187,
+			'=': 187,
+			'action': 88
+		};
+		return keyCodeMap[t] !== undefined ? keyCodeMap[t] : null;
+	}
+
+	function formatActionKeyLabel(token, keyCode) {
+		if (!token) {
+			return String(keyCode);
+		}
+		const t = token.toLowerCase();
+		if (/^\d+$/.test(t)) {
+			return String(parseInt(t, 10));
+		}
+		if (t.length === 1) {
+			return t.toUpperCase();
+		}
+		if (/^f\d{1,2}$/.test(t)) {
+			return t.toUpperCase();
+		}
+		if (/^key[a-z]$/.test(t)) {
+			return t.charAt(3).toUpperCase();
+		}
+		if (/^digit[0-9]$/.test(t)) {
+			return t.charAt(5);
+		}
+
+		const labelMap = {
+			'left': 'LEFT',
+			'up': 'UP',
+			'right': 'RIGHT',
+			'down': 'DOWN',
+			'space': 'SPACE',
+			'enter': 'ENTER',
+			'escape': 'ESC',
+			'esc': 'ESC',
+			'tab': 'TAB',
+			'backspace': 'BACKSPACE',
+			'delete': 'DEL',
+			'insert': 'INS',
+			'home': 'HOME',
+			'end': 'END',
+			'pageup': 'PGUP',
+			'pgup': 'PGUP',
+			'pagedown': 'PGDN',
+			'pgdown': 'PGDN',
+			'minus': '-',
+			'-': '-',
+			'plus': '+',
+			'=': '+',
+			'action': 'X'
+		};
+		return labelMap[t] || token.toUpperCase();
+	}
+
 	function assignMouseObject(preludeTerm, defaultName) {
 		if (preludeTerm in state.metadata) {
 			var name = state.metadata[preludeTerm] || defaultName;
@@ -16582,6 +16731,49 @@ function generateExtraMembersPart2(state) {
 	state.rdragID = assignMouseObject("mouse_rdrag", "rdrag");
 	state.lmbupID = assignMouseObject("mouse_up", "lmbup");
 	state.rmbupID = assignMouseObject("mouse_rup", "rmbup");
+
+	const actionSpecs = [];
+	const actionLines = [];
+	if (Array.isArray(state.actionkey_specs) && state.actionkey_specs.length > 0) {
+		for (let i = 0; i < state.actionkey_specs.length; i++) {
+			actionSpecs.push(state.actionkey_specs[i]);
+			actionLines.push((state.actionkey_lines && state.actionkey_lines[i]) || state.metadata_lines.actionkey);
+		}
+	} else if ("actionkey" in state.metadata) {
+		actionSpecs.push(state.metadata.actionkey || "");
+		actionLines.push(state.metadata_lines.actionkey);
+	}
+
+	for (let i = 0; i < actionSpecs.length; i++) {
+		const spec = actionSpecs[i];
+		const line = actionLines[i];
+		const parts = spec.split(/\s+/).filter(Boolean);
+		if (parts.length !== 2) {
+			logError(`ACTIONKEY expects exactly 2 arguments: "<key> <object>", but got "${spec}".`, line);
+			continue;
+		}
+
+		const keyCode = parseActionKeyCode(parts[0]);
+		if (keyCode === null) {
+			logError(`ACTIONKEY key "${parts[0]}" is not recognized.`, line);
+			continue;
+		}
+
+		const objId = resolveObjectId(parts[1], "actionkey");
+		if (objId !== null) {
+			state.actionKeyBindings = state.actionKeyBindings || {};
+			state.actionKeyLabels = state.actionKeyLabels || {};
+			state.actionKeyOrder = state.actionKeyOrder || [];
+			if (state.actionKeyBindings[keyCode] !== undefined && state.actionKeyBindings[keyCode] !== objId) {
+				logWarning(`ACTIONKEY "${parts[0]}" is already bound; overriding previous binding.`, line);
+			}
+			if (!(keyCode in state.actionKeyLabels)) {
+				state.actionKeyOrder.push(keyCode);
+			}
+			state.actionKeyLabels[keyCode] = formatActionKeyLabel(parts[0], keyCode);
+			state.actionKeyBindings[keyCode] = objId;
+		}
+	}
 	
 	if ("mouse_obstacle" in state.metadata) {
 		var name = state.metadata.mouse_obstacle;	
@@ -20347,6 +20539,35 @@ function mouseInput(id, coordIndex) {
 	}
 }
 
+function actionKeyInput(keyCode) {
+	if (!state || !state.actionKeyBindings) {
+		return false;
+	}
+	var objId = state.actionKeyBindings[keyCode];
+	if (objId === undefined || objId === null) {
+		return false;
+	}
+
+	var playerPositions = getPlayerPositions();
+	if (playerPositions.length === 0) {
+		return true;
+	}
+
+	var bak = backupLevel();
+	for (var i = 0; i < playerPositions.length; i++) {
+		var pos = playerPositions[i];
+		var cell = curLevel.getCell(pos);
+		cell.ibitset(objId);
+		curLevel.setCell(pos, cell);
+	}
+
+	var inputdir = 5; // mouse
+	if (processInput(inputdir, false, false, bak)) {
+		redraw();
+	}
+	return true;
+}
+
 var anyEditsSinceMouseDown = false;
 
 function onMouseDown(event, wasFiredByTouch = false) {
@@ -21062,6 +21283,10 @@ function checkKey(e,justPressed) {
     		input_throttle_timer=0;
     	}
     }
+	if (!textMode && justPressed && !againing && !suppressInput && actionKeyInput(e.keyCode)) {
+		pushInput(`actionkey,${e.keyCode}`);
+		return prevent(e);
+	}
     if (textMode) {
 		if(!throttle_movement) { //If movement isn't throttled, then throttle it anyway
 			if (!titleScreen && lastinput==inputdir && input_throttle_timer < repeatinterval) { //Don't throttle on level select

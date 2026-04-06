@@ -207,6 +207,25 @@ function generateTitleScreen(hoverLine, scrollIncrement, selectLine) {
 		if (state.keyhint_color) 
 			lineColorOverride[n] = state.keyhint_color;
 	}
+	const getActionHint = () => {
+		if (state.metadata.noaction) {
+			return " X to select";
+		}
+		const keys = ["X"];
+		if (Array.isArray(state.actionKeyOrder) && state.actionKeyLabels) {
+			for (const keyCode of state.actionKeyOrder) {
+				const label = state.actionKeyLabels[keyCode];
+				if (!label) {
+					continue;
+				}
+				const upper = String(label).toUpperCase();
+				if (!keys.includes(upper)) {
+					keys.push(upper);
+				}
+			}
+		}
+		return ` ${keys.join(",")} to action`;
+	}
 	if (state.metadata.text_controls) {
 		const text = wordwrap(state.metadata.text_controls, TITLE_WIDTH, true);
 		text.slice(0, 3).forEach((t,x) => {
@@ -215,7 +234,7 @@ function generateTitleScreen(hoverLine, scrollIncrement, selectLine) {
 	} else {
 		const tclick = state.metadata.mouse_drag || state.metadata.mouse_rdrag ? " Click, Tap, or Drag to interact" : " Click or Tap to interact";
 		setImage(10, IsMouseGameInputEnabled() ? tclick : " Arrow keys or WASD to move");
-		setImage(11, (state.metadata.noaction ? " X to select" : " X to action") + (state.metadata.norestart ? "" : ", R to restart"));
+		setImage(11, getActionHint() + (state.metadata.norestart ? "" : ", R to restart"));
 		const tundo = IsMouseGameInputEnabled() ? " Z or Middle Mouse Button to undo" : " Z to undo";
 		setImage(12, (state.metadata.noundo ? " " : tundo));
 	}
@@ -3349,6 +3368,9 @@ function processLevelInput() {
 			DoRestart();
 		} else if (val==="tick") {
 			processInput(-1);
+		} else if (String(val).startsWith('actionkey,')) {
+			const args = String(val).split(',');
+			actionKeyInput(parseInt(args[1], 10));
 		} else {
 			processInput(dirNames.indexOf(val));
 		}

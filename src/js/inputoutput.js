@@ -779,6 +779,35 @@ function mouseInput(id, coordIndex) {
 	}
 }
 
+function actionKeyInput(keyCode) {
+	if (!state || !state.actionKeyBindings) {
+		return false;
+	}
+	var objId = state.actionKeyBindings[keyCode];
+	if (objId === undefined || objId === null) {
+		return false;
+	}
+
+	var playerPositions = getPlayerPositions();
+	if (playerPositions.length === 0) {
+		return true;
+	}
+
+	var bak = backupLevel();
+	for (var i = 0; i < playerPositions.length; i++) {
+		var pos = playerPositions[i];
+		var cell = curLevel.getCell(pos);
+		cell.ibitset(objId);
+		curLevel.setCell(pos, cell);
+	}
+
+	var inputdir = 5; // mouse
+	if (processInput(inputdir, false, false, bak)) {
+		redraw();
+	}
+	return true;
+}
+
 var anyEditsSinceMouseDown = false;
 
 function onMouseDown(event, wasFiredByTouch = false) {
@@ -1489,7 +1518,7 @@ function checkKey(e,justPressed) {
 			}
 		}
     }
-    if (debugSwitch.includes('input')) console.log('checkKey', prevTimestamp, throttle_movement, inputdir, input_throttle_timer, repeatinterval);
+	if (debugSwitch.includes('input')) console.log('checkKey', prevTimestamp, throttle_movement, inputdir, input_throttle_timer, repeatinterval);
     if (throttle_movement && inputdir>=0&&inputdir<=3) {
     	if (lastinput==inputdir && input_throttle_timer<repeatinterval) {
     		return prevent(e);
@@ -1498,6 +1527,10 @@ function checkKey(e,justPressed) {
     		input_throttle_timer=0;
     	}
     }
+	if (!textMode && justPressed && !againing && !suppressInput && actionKeyInput(e.keyCode)) {
+		pushInput(`actionkey,${e.keyCode}`);
+		return prevent(e);
+	}
     if (textMode) {
 		if(!throttle_movement) { //If movement isn't throttled, then throttle it anyway
 			if (!titleScreen && lastinput==inputdir && input_throttle_timer < repeatinterval) { //Don't throttle on level select

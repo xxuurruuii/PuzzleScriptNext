@@ -795,6 +795,127 @@ function generateExtraMembers(state) {
 }
 
 function generateExtraMembersPart2(state) {
+	function resolveObjectId(name, preludeTerm) {
+		if (!name) {
+			return null;
+		}
+		if (state.objects[name]) {
+			return state.objects[name].id;
+		}
+		if (name in state.synonymsDict) {
+			const n = state.synonymsDict[name];
+			return state.objects[n].id;
+		}
+		logError(`${name} object/alias has to be defined`, state.metadata_lines[preludeTerm]);
+		return null;
+	}
+
+	function parseActionKeyCode(token) {
+		if (!token) {
+			return null;
+		}
+		const t = token.toLowerCase();
+		if (/^\d+$/.test(t)) {
+			const code = parseInt(t, 10);
+			if (code >= 0 && code <= 255) {
+				return code;
+			}
+			return null;
+		}
+		if (t.length === 1) {
+			return t.toUpperCase().charCodeAt(0);
+		}
+		if (/^f\d{1,2}$/.test(t)) {
+			const n = parseInt(t.substring(1), 10);
+			if (n >= 1 && n <= 24) {
+				return 111 + n;
+			}
+			return null;
+		}
+		if (/^key[a-z]$/.test(t)) {
+			return t.charAt(3).toUpperCase().charCodeAt(0);
+		}
+		if (/^digit[0-9]$/.test(t)) {
+			return 48 + parseInt(t.charAt(5), 10);
+		}
+
+		const keyCodeMap = {
+			'left': 37,
+			'up': 38,
+			'right': 39,
+			'down': 40,
+			'space': 32,
+			'enter': 13,
+			'escape': 27,
+			'esc': 27,
+			'tab': 9,
+			'backspace': 8,
+			'delete': 46,
+			'insert': 45,
+			'home': 36,
+			'end': 35,
+			'pageup': 33,
+			'pgup': 33,
+			'pagedown': 34,
+			'pgdown': 34,
+			'minus': 189,
+			'-': 189,
+			'plus': 187,
+			'=': 187,
+			'action': 88
+		};
+		return keyCodeMap[t] !== undefined ? keyCodeMap[t] : null;
+	}
+
+	function formatActionKeyLabel(token, keyCode) {
+		if (!token) {
+			return String(keyCode);
+		}
+		const t = token.toLowerCase();
+		if (/^\d+$/.test(t)) {
+			return String(parseInt(t, 10));
+		}
+		if (t.length === 1) {
+			return t.toUpperCase();
+		}
+		if (/^f\d{1,2}$/.test(t)) {
+			return t.toUpperCase();
+		}
+		if (/^key[a-z]$/.test(t)) {
+			return t.charAt(3).toUpperCase();
+		}
+		if (/^digit[0-9]$/.test(t)) {
+			return t.charAt(5);
+		}
+
+		const labelMap = {
+			'left': 'LEFT',
+			'up': 'UP',
+			'right': 'RIGHT',
+			'down': 'DOWN',
+			'space': 'SPACE',
+			'enter': 'ENTER',
+			'escape': 'ESC',
+			'esc': 'ESC',
+			'tab': 'TAB',
+			'backspace': 'BACKSPACE',
+			'delete': 'DEL',
+			'insert': 'INS',
+			'home': 'HOME',
+			'end': 'END',
+			'pageup': 'PGUP',
+			'pgup': 'PGUP',
+			'pagedown': 'PGDN',
+			'pgdown': 'PGDN',
+			'minus': '-',
+			'-': '-',
+			'plus': '+',
+			'=': '+',
+			'action': 'X'
+		};
+		return labelMap[t] || token.toUpperCase();
+	}
+
 	function assignMouseObject(preludeTerm, defaultName) {
 		if (preludeTerm in state.metadata) {
 			var name = state.metadata[preludeTerm] || defaultName;
@@ -833,6 +954,49 @@ function generateExtraMembersPart2(state) {
 	state.rdragID = assignMouseObject("mouse_rdrag", "rdrag");
 	state.lmbupID = assignMouseObject("mouse_up", "lmbup");
 	state.rmbupID = assignMouseObject("mouse_rup", "rmbup");
+
+	const actionSpecs = [];
+	const actionLines = [];
+	if (Array.isArray(state.actionkey_specs) && state.actionkey_specs.length > 0) {
+		for (let i = 0; i < state.actionkey_specs.length; i++) {
+			actionSpecs.push(state.actionkey_specs[i]);
+			actionLines.push((state.actionkey_lines && state.actionkey_lines[i]) || state.metadata_lines.actionkey);
+		}
+	} else if ("actionkey" in state.metadata) {
+		actionSpecs.push(state.metadata.actionkey || "");
+		actionLines.push(state.metadata_lines.actionkey);
+	}
+
+	for (let i = 0; i < actionSpecs.length; i++) {
+		const spec = actionSpecs[i];
+		const line = actionLines[i];
+		const parts = spec.split(/\s+/).filter(Boolean);
+		if (parts.length !== 2) {
+			logError(`ACTIONKEY expects exactly 2 arguments: "<key> <object>", but got "${spec}".`, line);
+			continue;
+		}
+
+		const keyCode = parseActionKeyCode(parts[0]);
+		if (keyCode === null) {
+			logError(`ACTIONKEY key "${parts[0]}" is not recognized.`, line);
+			continue;
+		}
+
+		const objId = resolveObjectId(parts[1], "actionkey");
+		if (objId !== null) {
+			state.actionKeyBindings = state.actionKeyBindings || {};
+			state.actionKeyLabels = state.actionKeyLabels || {};
+			state.actionKeyOrder = state.actionKeyOrder || [];
+			if (state.actionKeyBindings[keyCode] !== undefined && state.actionKeyBindings[keyCode] !== objId) {
+				logWarning(`ACTIONKEY "${parts[0]}" is already bound; overriding previous binding.`, line);
+			}
+			if (!(keyCode in state.actionKeyLabels)) {
+				state.actionKeyOrder.push(keyCode);
+			}
+			state.actionKeyLabels[keyCode] = formatActionKeyLabel(parts[0], keyCode);
+			state.actionKeyBindings[keyCode] = objId;
+		}
+	}
 	
 	if ("mouse_obstacle" in state.metadata) {
 		var name = state.metadata.mouse_obstacle;	

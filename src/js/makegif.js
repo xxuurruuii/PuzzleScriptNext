@@ -67,6 +67,9 @@ function makeGIF() {
 		} else if (val == "tick") {			
 			processInput(-1);
 			realtimeframe=true;
+		} else if (String(val).startsWith('actionkey,')) {
+			const args = String(val).split(',');
+			actionKeyInput(parseInt(args[1], 10));
 		} else if (String(val).startsWith('mouse')) {
 			const args = val.split(',');
 			mouseInput(args[1], args[2]);

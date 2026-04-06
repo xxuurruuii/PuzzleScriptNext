@@ -235,7 +235,7 @@ var codeMirrorFn = function() {
         'game_uri', 'level_title_style', 'show_level_title_in_menu', 
     ];
     const prelude_param_multi = [
-        'smoothscreen', 'puzzlescript', 'youtube', 'load_images', 'color_palette'
+        'smoothscreen', 'puzzlescript', 'youtube', 'load_images', 'color_palette', 'actionkey'
     ];
     const prelude_tables = [prelude_keywords, prelude_param_text, prelude_param_number, 
         prelude_param_single, prelude_param_multi];
@@ -529,7 +529,8 @@ var codeMirrorFn = function() {
             let kind = 'ERROR';
             const args = [];
             if (token = lexer.match(/^[a-z_]+/i, true)) {
-                if (state.metadata_lines[token]) {
+                const allowRepeatPrelude = token === 'actionkey';
+                if (state.metadata_lines[token] && !allowRepeatPrelude) {
                     var otherline = state.metadata_lines[token];
                     logWarning(`You've already defined a "${errorCase(token)}" in the prelude on line ${htmlJump(otherline)}.`, state.lineNumber);
                     lexer.pushToken(token, 'ERROR');
@@ -627,6 +628,11 @@ var codeMirrorFn = function() {
             } else if (ident == 'game_uri') {
                 logWarning(`Setting "${errorCase(ident)}" is an experimental Pattern:Script feature. Do not use.`,state.lineNumber);
                 return;
+            } else if (ident == 'actionkey') {
+                state.actionkey_specs = state.actionkey_specs || [];
+                state.actionkey_lines = state.actionkey_lines || [];
+                state.actionkey_specs.push(value[1]);
+                state.actionkey_lines.push(state.lineNumber);
             }
             state.metadata.push(...value);
         }
