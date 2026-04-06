@@ -12153,6 +12153,181 @@ Rule.prototype.tryApply = function(level) {
     return result;
 };
 
+const borderForwardByRuleDirection = {
+	1: 'up',
+	2: 'down',
+	4: 'left',
+	8: 'right'
+};
+
+const borderRelativeByForward = {
+	'right': { '^': 'up', 'v': 'down', '<': 'left', '>': 'right' },
+	'up': { '^': 'left', 'v': 'right', '<': 'down', '>': 'up' },
+	'down': { '^': 'right', 'v': 'left', '<': 'up', '>': 'down' },
+	'left': { '^': 'down', 'v': 'up', '<': 'right', '>': 'left' }
+};
+
+function parseBorderCommand(commandArg, ruleDirectionMask) {
+	const args = (commandArg || '').trim().split(/[\s,]+/).filter(Boolean);
+	if (args.length < 2) {
+		return null;
+	}
+
+	let directionToken = args[0].toLowerCase();
+	const amountToken = args[1];
+	if (!/^[-+]?\d+$/.test(amountToken)) {
+		return null;
+	}
+	let amount = parseInt(amountToken, 10);
+	if (!isFinite(amount) || isNaN(amount) || amount === 0) {
+		return null;
+	}
+
+	if (['up', 'down', 'left', 'right'].indexOf(directionToken) < 0) {
+		const forward = borderForwardByRuleDirection[ruleDirectionMask] || 'right';
+		const mapped = borderRelativeByForward[forward][directionToken];
+		if (!mapped) {
+			return null;
+		}
+		directionToken = mapped;
+	}
+
+	return {
+		direction: directionToken,
+		amount: amount
+	};
+}
+
+function getQueuedBorderCommands(commandQueue) {
+	const ret = [];
+	for (const queued of commandQueue) {
+		if (typeof queued !== 'string' || !queued.startsWith('border,')) {
+			continue;
+		}
+		const parts = queued.split(',');
+		if (parts.length !== 3) {
+			continue;
+		}
+		const amount = parseInt(parts[2], 10);
+		if (!isFinite(amount) || isNaN(amount) || amount === 0) {
+			continue;
+		}
+		ret.push({
+			direction: parts[1],
+			amount: amount
+		});
+	}
+	return ret;
+}
+
+function normalizeBorderAmount(direction, amount, width, height) {
+	let clamped = amount;
+	if (direction === 'left' || direction === 'right') {
+		if (amount < 0) {
+			clamped = Math.max(amount, 1 - width);
+		}
+	} else if (direction === 'up' || direction === 'down') {
+		if (amount < 0) {
+			clamped = Math.max(amount, 1 - height);
+		}
+	} else {
+		clamped = 0;
+	}
+	return clamped;
+}
+
+function applyBorderResize(direction, amount) {
+	const oldWidth = curLevel.width;
+	const oldHeight = curLevel.height;
+	const effectiveAmount = normalizeBorderAmount(direction, amount, oldWidth, oldHeight);
+	if (effectiveAmount === 0) {
+		return false;
+	}
+
+	const newWidth = oldWidth + ((direction === 'left' || direction === 'right') ? effectiveAmount : 0);
+	const newHeight = oldHeight + ((direction === 'up' || direction === 'down') ? effectiveAmount : 0);
+	if (newWidth <= 0 || newHeight <= 0) {
+		return false;
+	}
+
+	const oldObjects = curLevel.objects;
+	const newObjects = new Int32Array(newWidth * newHeight * STRIDE_OBJ);
+	const bgMask = new BitVec(STRIDE_OBJ);
+	bgMask.ibitset(state.backgroundid);
+	for (let i = 0; i < newWidth * newHeight; i++) {
+		for (let w = 0; w < STRIDE_OBJ; w++) {
+			newObjects[i * STRIDE_OBJ + w] = bgMask.data[w];
+		}
+	}
+
+	let xShift = 0;
+	let yShift = 0;
+	if (direction === 'left') {
+		xShift = effectiveAmount;
+	} else if (direction === 'up') {
+		yShift = effectiveAmount;
+	}
+
+	for (let x = 0; x < oldWidth; x++) {
+		for (let y = 0; y < oldHeight; y++) {
+			const nx = x + xShift;
+			const ny = y + yShift;
+			if (nx < 0 || ny < 0 || nx >= newWidth || ny >= newHeight) {
+				continue;
+			}
+			const oldIndex = y + x * oldHeight;
+			const newIndex = ny + nx * newHeight;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newObjects[newIndex * STRIDE_OBJ + w] = oldObjects[oldIndex * STRIDE_OBJ + w];
+			}
+		}
+	}
+
+	curLevel.width = newWidth;
+	curLevel.height = newHeight;
+	curLevel.n_tiles = newWidth * newHeight;
+	curLevel.objects = newObjects;
+	RebuildLevelArrays();
+	return true;
+}
+
+function applyQueuedBorderCommands(commandQueue, dryRun = false) {
+	if (!state || !state.metadata || !state.metadata.runtime_border_twiddling) {
+		return false;
+	}
+	const borders = getQueuedBorderCommands(commandQueue);
+	if (borders.length === 0) {
+		return false;
+	}
+
+	if (dryRun) {
+		let changed = false;
+		let width = curLevel.width;
+		let height = curLevel.height;
+		for (const border of borders) {
+			const effectiveAmount = normalizeBorderAmount(border.direction, border.amount, width, height);
+			if (effectiveAmount === 0) {
+				continue;
+			}
+			changed = true;
+			if (border.direction === 'left' || border.direction === 'right') {
+				width += effectiveAmount;
+			} else if (border.direction === 'up' || border.direction === 'down') {
+				height += effectiveAmount;
+			}
+		}
+		return changed;
+	}
+
+	let changed = false;
+	for (const border of borders) {
+		if (applyBorderResize(border.direction, border.amount)) {
+			changed = true;
+		}
+	}
+	return changed;
+}
+
 Rule.prototype.queueCommands = function() {
 	var commands = this.commands;
 	perfCounters.commands += commands.length;	
@@ -12195,22 +12370,31 @@ Rule.prototype.queueCommands = function() {
 
 	for(var i=0;i<commands.length;i++) {
 		var command=commands[i];
-		var already=false;
+		var queuedCommand = command[0];
 		if (command[0] == 'log') {		// log is not queued
 			consolePrintFromRule(`${command[1]}`, this, true);
-			continue;
-		} else if (curLevel.commandQueue.indexOf(command[0])>=0) {
 			continue;
 		} else if (command[0] == 'gosub') {			// gosub is not queued
 			gosubTarget = command[1];
 			continue;
+		} else if (command[0] == 'border') {
+			if (!state || !state.metadata || !state.metadata.runtime_border_twiddling) {
+				continue;
+			}
+			const border = parseBorderCommand(command[1], this.direction);
+			if (!border) {
+				continue;
+			}
+			queuedCommand = `border,${border.direction},${border.amount}`;
+		} else if (curLevel.commandQueue.indexOf(command[0])>=0) {
+			continue;
 		}
-		curLevel.commandQueue.push(command[0]);
+		curLevel.commandQueue.push(queuedCommand);
 		curLevel.commandQueueSourceRules.push(this);
 
 		if (verbose_logging) {
 			const inspect_ID =  addToDebugTimeline(curLevel, this.lineNumber);
-			const logString = htmlColor('green', `Rule ${htmlJump(this.lineNumber)} triggers command ${command[0]}.`);
+			const logString = htmlColor('green', `Rule ${htmlJump(this.lineNumber)} triggers command ${queuedCommand}.`);
 			consolePrint(logString, false, this.lineNumber, inspect_ID);
 		}
 
@@ -12933,6 +13117,14 @@ function procInp(dir,dontDoWin,dontModify,bak,coord) {
 			return true;
 		}
 
+		const borderChanged = applyQueuedBorderCommands(curLevel.commandQueue, dontModify);
+		if (dontModify && borderChanged) {
+			if (verbose_logging) {
+				consoleCacheDump();
+			}
+			return true;
+		}
+
 		var save_backup = true;
 		if(!winning && curLevel.commandQueue.indexOf('nosave')>=0) {
 			if (verbose_logging) { 
@@ -12943,31 +13135,42 @@ function procInp(dir,dontDoWin,dontModify,bak,coord) {
 		}
 	    
         var modified=false;
-	    for (var i=0;i<curLevel.objects.length;i++) {
-	    	if (curLevel.objects[i]!==bak.dat[i]) {
-				if (dontModify) {
-	        		if (verbose_logging) {
-	        			consoleCacheDump();
-	        		}
-	        		addUndoState(bak);
-	        		DoUndo(true,false, false);
-					return true;
-				} else {
-					if (dir!==-1 && save_backup) {
-						addUndoState(bak);
-					} else if (backups.length > 0) {
-						// This is for the case that diffs break the undo buffer for real-time games 
-						// ( c f https://github.com/increpare/PuzzleScript/pull/796 ),
-						// because realtime ticks are ignored when the user presses undo and the backup
-						// array reflects this structure.  
-						backups[backups.length - 1] = unconsolidateDiff(backups[backups.length - 1], bak);					
-	    			}
-	    			modified=true;
-	    			updateCameraPositionTarget();
+		var changed = borderChanged ||
+			(curLevel.width!==bak.width) ||
+			(curLevel.height!==bak.height) ||
+			(curLevel.objects.length!==bak.dat.length);
+
+		if (!changed) {
+	    	for (var i=0;i<curLevel.objects.length;i++) {
+	    		if (curLevel.objects[i]!==bak.dat[i]) {
+	    			changed = true;
+	    			break;
 	    		}
-	    		break;
 	    	}
-	    }
+		}
+
+		if (changed) {
+			if (dontModify) {
+	        	if (verbose_logging) {
+	        		consoleCacheDump();
+	        	}
+	        	addUndoState(bak);
+	        	DoUndo(true,false, false);
+				return true;
+			} else {
+				if (dir!==-1 && save_backup) {
+					addUndoState(bak);
+				} else if (backups.length > 0) {
+					// This is for the case that diffs break the undo buffer for real-time games 
+					// ( c f https://github.com/increpare/PuzzleScript/pull/796 ),
+					// because realtime ticks are ignored when the user presses undo and the backup
+					// array reflects this structure.  
+					backups[backups.length - 1] = unconsolidateDiff(backups[backups.length - 1], bak);					
+	    		}
+	    		modified=true;
+	    		updateCameraPositionTarget();
+	    	}
+		}
 
 		if (dontModify && curLevel.commandQueue.indexOf('win')>=0 || curLevel.commandQueue.indexOf('restart')>=0) {	
 	    	return true;	
@@ -13091,6 +13294,9 @@ function procInp(dir,dontDoWin,dontModify,bak,coord) {
 	    curLevel.commandQueue=[];
 	    curLevel.commandQueueSourceRules=[];
 		if (debugSwitch.includes('anim')) console.log(`Animate: ${JSON.stringify(seedsToAnimate)}`);
+		if (!dontModify && borderChanged) {
+			canvasResize();
+		}
 
     }
 
@@ -13551,16 +13757,16 @@ let errorCount = 0;         //only counts errors
 let caseSensitive = false;
 
 // used here and in compiler
-const reg_commandwords = /^(afx[\w:=+-.]+|sfx\d+|cancel|checkpoint|restart|win|message|again|undo|nosave|quit|zoomscreen|flickscreen|smoothscreen|again_interval|realtime_interval|key_repeat_interval|noundo|norestart|background_color|text_color|goto|message_text_align|status|gosub|link|log|color_palette)$/i;
+const reg_commandwords = /^(afx[\w:=+-.]+|sfx\d+|cancel|checkpoint|restart|win|message|again|undo|nosave|quit|border|zoomscreen|flickscreen|smoothscreen|again_interval|realtime_interval|key_repeat_interval|noundo|norestart|background_color|text_color|goto|message_text_align|status|gosub|link|log|color_palette)$/i;
 const reg_name = /^[\p{L}\p{N}_$]+/u;
 const reg_objectname = /^[\p{L}\p{N}_$]+(:[\p{L}\p{N}_$]+)*/u;              // object name for definition
 const reg_objectnamerel = /^[\p{L}\p{N}_$]+(:[<>v^]|:[\p{L}\p{N}_$]+)*$/u;  // object name with relative parts for use in rules
 const reg_objmodi = /^(canvas|copy|flip|rot|scale|shift|text|translate):/i;
 
-const commandwords_table = ['cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'nosave', 'quit', 'zoomscreen', 'flickscreen', 'smoothscreen', 
+const commandwords_table = ['cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'nosave', 'quit', 'border', 'zoomscreen', 'flickscreen', 'smoothscreen', 
     'again_interval', 'realtime_interval', 'key_repeat_interval', 'noundo', 'norestart', 'background_color', 'text_color', 'goto', 'message_text_align', 'status', 'gosub'
 ];
-const commandargs_table = ['message', 'goto', 'status', 'gosub', 'log'];
+const commandargs_table = ['message', 'goto', 'status', 'gosub', 'log', 'border'];
 const twiddleable_params = [
     'background_color', 'text_color', 'key_repeat_interval', 'realtime_interval', 'again_interval', 'flickscreen', 'zoomscreen', 'smoothscreen', 'noundo', 
     'norestart', 'message_text_align', 'color_palette'
@@ -13741,7 +13947,7 @@ var codeMirrorFn = function() {
     const prelude_keywords = ['allow_undo_level', 'auto_level_titles', 'case_sensitive', 'continue_is_level_select', 'debug', 'enable_pause', 
         'level_select', 'level_select_lock', 
         'mouse_clicks', 'noaction', 'nokeyboard', 'norepeat_action', 'norestart', 'noundo', 'require_player_movement', 
-        'run_rules_on_level_start', 'runtime_metadata_twiddling', 'runtime_metadata_twiddling_debug', 'scanline', 'render_height',
+        'run_rules_on_level_start', 'runtime_metadata_twiddling', 'runtime_metadata_twiddling_debug', 'runtime_border_twiddling', 'scanline', 'render_height',
         'skip_title_screen', 'smoothscreen_debug', 'status_line', 'throttle_movement', 'verbose_logging'];
     const prelude_param_text = ['title', 'author', 'homepage', 'custom_font', 'text_controls', 'text_message_continue', 'debug_switch', 'export_options' ];
     const prelude_param_number = ['again_interval', 'animate_interval', 'font_size', 'key_repeat_interval', 
@@ -17513,11 +17719,42 @@ function deepCloneRule(rule, fnlhs, fnrhs) {
 		late: rule.late,
 		rigid: rule.rigid,
 		groupNumber: rule.groupNumber,
-		commands:rule.commands,
+		commands: (rule.commands || []).map(cmd => [ ...cmd ]),
 		randomRule:rule.randomRule,
 		globalRule:rule.globalRule,
         isOnce: rule.isOnce,
 	};
+}
+
+function absolutifyBorderCommandArg(forward, arg) {
+    const parts = (arg || '').trim().split(/[\s,]+/).filter(Boolean);
+    if (parts.length < 2) {
+        return arg;
+    }
+
+    let dir = parts[0].toLowerCase();
+    if (simpleRelativeDirections.includes(dir)) {
+        if (!(forward in relativeDict)) {
+            return arg;
+        }
+        dir = relativeDict[forward][relativeDirs.indexOf(dir)];
+    } else if (!simpleAbsoluteDirections.includes(dir)) {
+        return arg;
+    }
+
+    parts[0] = dir;
+    return parts.join(' ');
+}
+
+function absolutifyBorderCommands(rule) {
+    if (!rule || !rule.commands || !rule.direction) {
+        return;
+    }
+    for (const cmd of rule.commands) {
+        if (cmd[0] === 'border' && typeof cmd[1] === 'string') {
+            cmd[1] = absolutifyBorderCommandArg(rule.direction, cmd[1]);
+        }
+    }
 }
 
 // make multiple passes to parse and expand rules, with absolute directions and objects
@@ -17531,6 +17768,7 @@ function rulesToArray(state) {
     checkRuleObjects(state, rules);
     rules = expandRulesWithMultiDirectionObjects(state, rules);
     for (const rule of rules) {
+        absolutifyBorderCommands(rule);
         if (!debugSwitch.includes('noul')) rewriteUpLeftRules(rule);
         atomizeAggregates(state, rule);
         if (state.invalid) return; // protect next from crash
