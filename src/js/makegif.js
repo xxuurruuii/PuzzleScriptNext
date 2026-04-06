@@ -7,14 +7,6 @@ function makeGIF() {
 	var randomseed = RandomGen.seed;
 	levelEditorOpened=false;
 	var targetlevel=curLevelNo;
-	var gifcanvas = document.createElement('canvas');
-	gifcanvas.width=screenwidth*cellwidth;
-	gifcanvas.height=screenheight*cellheight;
-	gifcanvas.style.width=screenwidth*cellwidth;
-	gifcanvas.style.height=screenheight*cellheight;
-
-	var gifctx = gifcanvas.getContext('2d');
-	gifctx.imageSmoothingEnabled = false;
 
 	var inputDat = inputHistory.concat([]);
 	var soundDat = soundHistory.concat([]);
@@ -34,11 +26,38 @@ function makeGIF() {
 	canvasResize();
 	redraw();
 
+	function getGifLayoutCells() {
+		var layoutWidth = screenwidth;
+		var layoutHeight = screenheight;
+		if (typeof shouldShowExtraDebugBoard === 'function' && shouldShowExtraDebugBoard()) {
+			var extraSize = (typeof getExtraDebugBoardSize === 'function') ? getExtraDebugBoardSize(curLevel) : null;
+			if (extraSize) {
+				layoutWidth = screenwidth + 1 + extraSize.width;
+				layoutHeight = Math.max(screenheight, extraSize.height);
+			}
+		}
+		return {
+			width: Math.max(1, layoutWidth),
+			height: Math.max(1, layoutHeight)
+		};
+	}
+
+	var initialLayout = getGifLayoutCells();
+	var gifcanvas = document.createElement('canvas');
+	gifcanvas.width = initialLayout.width * cellwidth;
+	gifcanvas.height = initialLayout.height * cellheight;
+	gifcanvas.style.width = gifcanvas.width;
+	gifcanvas.style.height = gifcanvas.height;
+
+	var gifctx = gifcanvas.getContext('2d');
+	gifctx.imageSmoothingEnabled = false;
+
 	// Draw the current playfield to the GIF canvas, scaling each frame to the
 	// largest size that fits while keeping it centered.
 	function addGifFrame() {
-		var srcW = Math.max(1, (screenwidth * cellwidth) | 0);
-		var srcH = Math.max(1, (screenheight * cellheight) | 0);
+		var layout = getGifLayoutCells();
+		var srcW = Math.max(1, (layout.width * cellwidth) | 0);
+		var srcH = Math.max(1, (layout.height * cellheight) | 0);
 		var srcX = xoffset | 0;
 		var srcY = yoffset | 0;
 

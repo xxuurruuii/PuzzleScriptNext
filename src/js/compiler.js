@@ -424,6 +424,15 @@ function colorToHex(palette, str) {
 }
 
 var debugMode;
+const EXTRA_OBJECT_PREFIX = "__extra__";
+
+function isExtraObjectName(name) {
+    return typeof name === "string" && name.startsWith(EXTRA_OBJECT_PREFIX);
+}
+
+function toExtraObjectName(name) {
+    return `${EXTRA_OBJECT_PREFIX}${name}`;
+}
 
 function generateExtraMembers(state) {
 
@@ -431,11 +440,60 @@ function generateExtraMembers(state) {
         logError("No collision layers defined.  All objects need to be in collision layers.");
     }
 
+    const extraBoardEnabled = !!state.metadata.extra_board;
+    if (state.metadata.extra_debug && !extraBoardEnabled) {
+        logWarning("EXTRA_DEBUG is ignored unless EXTRA_BOARD is enabled.", state.metadata_lines.extra_debug);
+    }
+
+    if (extraBoardEnabled) {
+        const baseObjectNames = Object.keys(state.objects).filter(name => !isExtraObjectName(name));
+        const baseLayerCount = state.collisionLayers.length;
+        state.extraBoardEnabled = true;
+        state.extraObjectPrefix = EXTRA_OBJECT_PREFIX;
+        state.extraBaseObjectNames = baseObjectNames.slice();
+        state.extraBaseLayerCount = baseLayerCount;
+        state.extraNameMap = state.extraNameMap || {};
+
+        for (const baseName of baseObjectNames) {
+            const extraName = toExtraObjectName(baseName);
+            state.extraNameMap[baseName] = extraName;
+            if (!(extraName in state.objects)) {
+                state.objects[extraName] = deepClone(state.objects[baseName]);
+            }
+        }
+
+        function cloneLegendEntries(list) {
+            const clones = [];
+            for (const entry of list) {
+                if (entry.length < 2 || isExtraObjectName(entry[0])) {
+                    continue;
+                }
+                const cloned = entry.map(name => toExtraObjectName(name));
+                cloned.lineNumber = entry.lineNumber;
+                clones.push(cloned);
+                state.extraNameMap[entry[0]] = cloned[0];
+            }
+            list.push(...clones);
+        }
+
+        cloneLegendEntries(state.legend_synonyms);
+        cloneLegendEntries(state.legend_properties);
+        cloneLegendEntries(state.legend_aggregates);
+
+        const extraCollisionLayers = state.collisionLayers.map(layer => layer.map(name => toExtraObjectName(name)));
+        state.collisionLayers.push(...extraCollisionLayers);
+    } else {
+        state.extraBoardEnabled = false;
+    }
+
     //annotate objects with layers
     //assign ids at the same time
     state.idDict = [];          // doc: dictionary of object names indexed by ID
     var idcount = 0;
     for (var layerIndex = 0; layerIndex < state.collisionLayers.length; layerIndex++) {
+        if (extraBoardEnabled && layerIndex === state.extraBaseLayerCount) {
+            state.extraObjectStartId = idcount;
+        }
         for (var j = 0; j < state.collisionLayers[layerIndex].length; j++) {
             var n = state.collisionLayers[layerIndex][j];
             if (n in state.objects) {
@@ -449,7 +507,7 @@ function generateExtraMembers(state) {
     }
 
     // PS> fill in start and length of each group of objects
-    let prevObjectNo = idcount;
+    let prevObjectNo = (extraBoardEnabled && state.extraObjectStartId !== undefined) ? state.extraObjectStartId : idcount;
     for (let i = state.collisionLayerGroups.length - 1; i >= 0; --i) {
         const group = state.collisionLayerGroups[i];
         group.firstObjectNo = state.objects[state.collisionLayers[group.layer][0]].id;
@@ -459,6 +517,24 @@ function generateExtraMembers(state) {
 
     //set object count
     state.objectCount = idcount;
+
+    if (extraBoardEnabled) {
+        state.extraIdByBaseId = {};
+        state.baseIdByExtraId = {};
+        let minExtraId = Number.MAX_SAFE_INTEGER;
+        for (const baseName of state.extraBaseObjectNames) {
+            const extraName = toExtraObjectName(baseName);
+            const baseObj = state.objects[baseName];
+            const extraObj = state.objects[extraName];
+            if (!baseObj || !extraObj) {
+                continue;
+            }
+            state.extraIdByBaseId[baseObj.id] = extraObj.id;
+            state.baseIdByExtraId[extraObj.id] = baseObj.id;
+            minExtraId = Math.min(minExtraId, extraObj.id);
+        }
+        state.extraObjectStartId = (minExtraId === Number.MAX_SAFE_INTEGER) ? state.objectCount : minExtraId;
+    }
 
     //calculate blank mask template
     var layerCount = state.collisionLayers.length;
@@ -792,6 +868,15 @@ function generateExtraMembers(state) {
     }
     state.backgroundid = backgroundid;
     state.backgroundlayer = backgroundlayer;
+    if (extraBoardEnabled) {
+        state.extraBackgroundid = state.extraIdByBaseId[backgroundid];
+        if (state.extraBackgroundid === undefined) {
+            logError("EXTRA_BOARD internal error: failed to derive extra background object.");
+        } else {
+            const extraBgName = state.idDict[state.extraBackgroundid];
+            state.extraBackgroundlayer = state.objects[extraBgName].layer;
+        }
+    }
 }
 
 function generateExtraMembersPart2(state) {
@@ -1029,9 +1114,11 @@ Level.prototype.calcBackgroundMask = function(state) {
     return cell;
 }
 
-function levelFromString(state,level) {
-	var backgroundlayer=state.backgroundlayer;
-	//var backgroundid=state.backgroundid;
+function levelFromString(state,level, isExtraBoard = false) {
+	var backgroundlayer = state.backgroundlayer;
+	if (isExtraBoard && state.extraBoardEnabled && state.extraBackgroundlayer !== undefined) {
+		backgroundlayer = state.extraBackgroundlayer;
+	}
 	var backgroundLayerMask = state.layerMasks[backgroundlayer];
 
     // pad all lines to same length
@@ -1040,6 +1127,8 @@ function levelFromString(state,level) {
 
 	var o = new Level(level[0], level[2].length, level.length-2, state.collisionLayers.length, null, level[1]);
 	o.objects = new Int32Array(o.width * o.height * STRIDE_OBJ);
+	o.mainBoardWidth = o.width;
+	o.mainBoardHeight = o.height;
 
 	for (var i = 0; i < o.width; i++) {
 		for (var j = 0; j < o.height; j++) {
@@ -1059,7 +1148,21 @@ function levelFromString(state,level) {
 			}
 
 			var maskint = new BitVec(STRIDE_OBJ);
-			mask = mask.concat([]);					
+			mask = mask.concat([]);
+			if (isExtraBoard && state.extraBoardEnabled) {
+				const remapped = new Array(mask.length).fill(-1);
+				for (var z = 0; z < mask.length; z++) {
+					if (mask[z] >= 0) {
+						const extraId = state.extraIdByBaseId[mask[z]];
+						if (extraId !== undefined) {
+							const extraObjName = state.idDict[extraId];
+							const extraLayer = state.objects[extraObjName].layer;
+							remapped[extraLayer] = extraId;
+						}
+					}
+				}
+				mask = remapped;
+			}
 			for (var z = 0; z < o.layerCount; z++) {
 				if (mask[z]>=0) {
 					maskint.ibitset(mask[z]);
@@ -1071,7 +1174,13 @@ function levelFromString(state,level) {
 		}
 	}
 
-	var levelBackgroundMask = o.calcBackgroundMask(state);
+	var levelBackgroundMask;
+	if (isExtraBoard && state.extraBoardEnabled && state.extraBackgroundid !== undefined) {
+		levelBackgroundMask = new BitVec(STRIDE_OBJ);
+		levelBackgroundMask.ibitset(state.extraBackgroundid);
+	} else {
+		levelBackgroundMask = o.calcBackgroundMask(state);
+	}
 	for (var i=0;i<o.n_tiles;i++)
 	{
 		var cell = o.getCell(i);
@@ -1130,6 +1239,8 @@ function levelsToArray(state) {
     let section, title, description, gotoFlag, input;
     let expectLayerGrid = false;
     let expectLayerLine = null;
+    let expectExtraGrid = false;
+    let expectExtraLine = null;
     const layerObjectIds = state.collisionLayers.map(layer => layer.map(name => state.objects[name].id));
 
     const isGridLevel = level => level instanceof Level;
@@ -1176,6 +1287,121 @@ function levelsToArray(state) {
         }
         return true;
     }
+
+    function initExtraBoard(level) {
+        if (!state.extraBoardEnabled || state.extraBackgroundid === undefined || state.extraBackgroundlayer === undefined) {
+            return;
+        }
+        level.mainBoardWidth = level.mainBoardWidth || level.width;
+        level.mainBoardHeight = level.mainBoardHeight || level.height;
+        level.extraBoardWidth = 1;
+        level.extraBoardHeight = 1;
+
+        const extraAllMask = new BitVec(STRIDE_OBJ);
+        for (const baseIdText of Object.keys(state.extraIdByBaseId || {})) {
+            const extraId = state.extraIdByBaseId[baseIdText];
+            if (extraId !== undefined) {
+                extraAllMask.ibitset(extraId);
+            }
+        }
+        const extraBgMask = new BitVec(STRIDE_OBJ);
+        extraBgMask.ibitset(state.extraBackgroundid);
+
+        for (let x = 0; x < level.width; x++) {
+            for (let y = 0; y < level.height; y++) {
+                const idx = y + x * level.height;
+                const cell = level.getCell(idx);
+                cell.iclear(extraAllMask);
+                if (x === 0 && y === 0) {
+                    cell.ior(extraBgMask);
+                }
+                level.setCell(idx, cell);
+            }
+        }
+    }
+
+    function resizeLevelTo(level, newWidth, newHeight) {
+        if (newWidth === level.width && newHeight === level.height) {
+            return;
+        }
+        const oldWidth = level.width;
+        const oldHeight = level.height;
+        const oldObjects = level.objects;
+        const newObjects = new Int32Array(newWidth * newHeight * STRIDE_OBJ);
+
+        for (let x = 0; x < oldWidth; x++) {
+            for (let y = 0; y < oldHeight; y++) {
+                if (x >= newWidth || y >= newHeight) {
+                    continue;
+                }
+                const oldIndex = (y + x * oldHeight) * STRIDE_OBJ;
+                const newIndex = (y + x * newHeight) * STRIDE_OBJ;
+                for (let w = 0; w < STRIDE_OBJ; w++) {
+                    newObjects[newIndex + w] = oldObjects[oldIndex + w];
+                }
+            }
+        }
+
+        level.width = newWidth;
+        level.height = newHeight;
+        level.n_tiles = newWidth * newHeight;
+        level.objects = newObjects;
+    }
+
+    function mergeExtraLevel(baseLevel, overlayLevel, lineNumber) {
+        if (!state.extraBoardEnabled) {
+            logError("The EXTRA separator in LEVELS requires the EXTRA_BOARD prelude flag.", lineNumber);
+            return false;
+        }
+        const mergedWidth = Math.max(baseLevel.width, overlayLevel.width);
+        const mergedHeight = Math.max(baseLevel.height, overlayLevel.height);
+        resizeLevelTo(baseLevel, mergedWidth, mergedHeight);
+        baseLevel.extraBoardWidth = overlayLevel.width;
+        baseLevel.extraBoardHeight = overlayLevel.height;
+
+        const startLayer = state.extraBaseLayerCount || 0;
+        const extraAllMask = new BitVec(STRIDE_OBJ);
+        for (const baseIdText of Object.keys(state.extraIdByBaseId || {})) {
+            const extraId = state.extraIdByBaseId[baseIdText];
+            if (extraId !== undefined) {
+                extraAllMask.ibitset(extraId);
+            }
+        }
+
+        // Clear existing extra-board content first so the overlay fully defines it.
+        for (let i = 0; i < baseLevel.n_tiles; i++) {
+            const cell = baseLevel.getCell(i);
+            cell.iclear(extraAllMask);
+            baseLevel.setCell(i, cell);
+        }
+
+        for (let x = 0; x < overlayLevel.width; x++) {
+            for (let y = 0; y < overlayLevel.height; y++) {
+                const baseIndex = y + x * baseLevel.height;
+                const overlayIndex = y + x * overlayLevel.height;
+                const baseCell = baseLevel.getCell(baseIndex);
+                const overlayCell = overlayLevel.getCell(overlayIndex);
+
+                for (let layerIndex = startLayer; layerIndex < state.layerMasks.length; layerIndex++) {
+                    const layerIds = layerObjectIds[layerIndex] || [];
+                    let overlayId = -1;
+                    for (const id of layerIds) {
+                        if (overlayCell.get(id)) {
+                            overlayId = id;
+                            break;
+                        }
+                    }
+                    if (overlayId === -1) {
+                        continue;
+                    }
+                    baseCell.iclear(state.layerMasks[layerIndex]);
+                    baseCell.ibitset(overlayId);
+                }
+                baseLevel.setCell(baseIndex, baseCell);
+            }
+        }
+        return true;
+    }
     
     if (state.levels.at(-1).length == 0)
         state.levels.pop();
@@ -1189,6 +1415,11 @@ function levelsToArray(state) {
             logError('LAYER must be followed immediately by map rows.', level[2]);
             expectLayerGrid = false;
             expectLayerLine = null;
+        }
+        if (typeof level[0] === 'string' && level[0] !== 'extra' && expectExtraGrid) {
+            logError('EXTRA must be followed immediately by map rows.', level[2]);
+            expectExtraGrid = false;
+            expectExtraLine = null;
         }
 		if (level[0] == 'message') {
             if (gotoFlag) logWarning('Message unreachable due to previous GOTO.', level[2]);
@@ -1235,11 +1466,24 @@ function levelsToArray(state) {
                 expectLayerGrid = true;
                 expectLayerLine = level[2];
             }
+		} else if (level[0] == 'extra') {
+            if (level[1] && level[1].trim().length > 0)
+                logWarning(`EXTRA does not take text, so "${level[1].trim()}" is ignored.`, level[2]);
+            if (expectExtraGrid) {
+                logError('EXTRA cannot appear twice in a row without map rows in between.', level[2]);
+            } else if (!isGridLevel(levels.at(-1))) {
+                logError('EXTRA must follow a map in the LEVELS section.', level[2]);
+            } else if (!state.extraBoardEnabled) {
+                logError("EXTRA in LEVELS requires the EXTRA_BOARD prelude flag.", level[2]);
+            } else {
+                expectExtraGrid = true;
+                expectExtraLine = level[2];
+            }
 		} else {
             if (gotoFlag && links.length == 0) 
                 logWarning('Level unreachable due to previous GOTO.', level[0]);
             level[1] = section; // todo: fix it
-            const compiledLevel = levelFromString(state, level);
+            const compiledLevel = levelFromString(state, level, expectExtraGrid);
             if (expectLayerGrid && isGridLevel(levels.at(-1))) {
                 if (!mergeLevelLayer(levels.at(-1), compiledLevel, level[0])) {
                     levels.push(compiledLevel);
@@ -1251,7 +1495,14 @@ function levelsToArray(state) {
                 }
                 expectLayerGrid = false;
                 expectLayerLine = null;
+            } else if (expectExtraGrid && isGridLevel(levels.at(-1))) {
+                mergeExtraLevel(levels.at(-1), compiledLevel, level[0]);
+                expectExtraGrid = false;
+                expectExtraLine = null;
             } else {
+                if (state.extraBoardEnabled) {
+                    initExtraBoard(compiledLevel);
+                }
 			    levels.push(compiledLevel);
                 levels.at(-1).title = title;
                 levels.at(-1).linksTop = links.length;
@@ -1263,6 +1514,9 @@ function levelsToArray(state) {
 	});
     if (expectLayerGrid) {
         logError('LAYER must be followed by another map block.', expectLayerLine);
+    }
+    if (expectExtraGrid) {
+        logError('EXTRA must be followed by another map block.', expectExtraLine);
     }
     links.forEach(link => {
         let index = -9999;
@@ -1570,7 +1824,7 @@ function processRuleString(rule, state, curRules) {
                     logError("Error, an item can only have one direction/action at a time, but you're looking for several at once!", lineNumber);
                 } else if (!incellrow) {
                     logWarning("Invalid syntax. Directions should be placed at the start of a rule.", lineNumber);
-                } else if (late && token!=='no' && token!=='random' && token!=='randomdir') {
+                } else if (late && token!=='no' && token!=='random' && token!=='randomdir' && token!=='extra') {
                     logError("Movements cannot appear in late rules.", lineNumber);
                   } else {
                     curcell.push(token);
@@ -1790,6 +2044,33 @@ function absolutifyBorderCommands(rule) {
     }
 }
 
+function mapExtraQualifiedName(state, ident, lineNumber) {
+    if (!state.extraBoardEnabled) {
+        logError('The EXTRA qualifier can only be used when EXTRA_BOARD is enabled in the prelude.', lineNumber);
+        return ident;
+    }
+    const mapped = state.extraNameMap && state.extraNameMap[ident];
+    if (mapped) {
+        return mapped;
+    }
+    logError(`EXTRA qualifier used with "${errorCase(ident)}", but that name has no extra-board variant.`, lineNumber);
+    return ident;
+}
+
+function rewriteExtraBoardQualifiers(state, rule) {
+    function rewriteCell(cell) {
+        for (let i = 0; i < cell.length; i += 2) {
+            if (cell[i] === 'extra') {
+                cell[i] = '';
+                cell[i + 1] = mapExtraQualifiedName(state, cell[i + 1], rule.lineNumber);
+            }
+        }
+    }
+
+    rule.lhs.forEach(row => row.forEach(rewriteCell));
+    rule.rhs.forEach(row => row.forEach(rewriteCell));
+}
+
 // make multiple passes to parse and expand rules, with absolute directions and objects
 function rulesToArray(state) {
     let rules = parseRulesToArray(state);
@@ -1801,6 +2082,7 @@ function rulesToArray(state) {
     checkRuleObjects(state, rules);
     rules = expandRulesWithMultiDirectionObjects(state, rules);
     for (const rule of rules) {
+        rewriteExtraBoardQualifiers(state, rule);
         absolutifyBorderCommands(rule);
         if (!debugSwitch.includes('noul')) rewriteUpLeftRules(rule);
         atomizeAggregates(state, rule);
@@ -2959,6 +3241,82 @@ function cellRowMasks_Movements(rule){
 }
 
 function collapseRules(groups) {
+    function getRuleBoardScope(oldrule) {
+        if (!state.extraBoardEnabled || (!state.baseIdByExtraId && !state.extraIdByBaseId)) {
+            return 0;
+        }
+
+        let touchesMain = false;
+        let touchesExtra = false;
+
+        function markObjectId(id) {
+            if (!isFinite(id) || isNaN(id) || id < 0) {
+                return;
+            }
+            if (state.baseIdByExtraId && state.baseIdByExtraId[id] !== undefined) {
+                touchesExtra = true;
+            } else if (state.extraIdByBaseId && state.extraIdByBaseId[id] !== undefined) {
+                touchesMain = true;
+            } else {
+                // Fallback for non-duplicated IDs: treat as main-board objects.
+                touchesMain = true;
+            }
+        }
+
+        function markMask(mask) {
+            if (!mask) {
+                return;
+            }
+            if (Array.isArray(mask)) {
+                for (const sub of mask) {
+                    markMask(sub);
+                    if (touchesMain && touchesExtra) {
+                        return;
+                    }
+                }
+                return;
+            }
+            if (typeof mask.get !== 'function') {
+                return;
+            }
+            for (let id = 0; id < state.objectCount; id++) {
+                if (mask.get(id)) {
+                    markObjectId(id);
+                    if (touchesMain && touchesExtra) {
+                        return;
+                    }
+                }
+            }
+        }
+
+        for (const row of oldrule.lhs) {
+            for (const cell of row) {
+                if (cell === ellipsisPattern) {
+                    continue;
+                }
+                markMask(cell.objectsPresent);
+                markMask(cell.objectsMissing);
+                markMask(cell.anyObjectsPresent);
+                if (cell.replacement) {
+                    markMask(cell.replacement.objectsClear);
+                    markMask(cell.replacement.objectsSet);
+                    markMask(cell.replacement.randomEntityMask);
+                }
+                if (touchesMain && touchesExtra) {
+                    return 0;
+                }
+            }
+        }
+
+        if (touchesMain && !touchesExtra) {
+            return 1;
+        }
+        if (touchesExtra && !touchesMain) {
+            return 2;
+        }
+        return 0;
+    }
+
     for (var gn = 0; gn < groups.length; gn++) {
         var rules = groups[gn];
         for (var i = 0; i < rules.length; i++) {
@@ -2995,6 +3353,7 @@ function collapseRules(groups) {
             newrule.push(cellRowMasks_Movements(newrule));
             newrule.push(oldrule.globalRule);
             newrule.push(oldrule.isOnce);
+            newrule.push(getRuleBoardScope(oldrule));
             rules[i] = new Rule(newrule);
         }
     }

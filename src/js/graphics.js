@@ -433,6 +433,40 @@ function glyphCount() {
     return state.glyphOrder.filter(g => g.length == 1).length;
 }
 
+function shouldShowExtraDebugBoard() {
+    return !!state
+        && !!state.metadata
+        && !!state.extraBoardEnabled
+        && !!state.metadata.extra_debug
+        && !textMode
+        && !levelEditorOpened;
+}
+
+function getExtraDebugBoardSize(level = curLevel) {
+    if (!shouldShowExtraDebugBoard() || !level) {
+        return null;
+    }
+
+    const widthRaw = isFinite(level.extraBoardWidth) ? Math.floor(level.extraBoardWidth) : 1;
+    const heightRaw = isFinite(level.extraBoardHeight) ? Math.floor(level.extraBoardHeight) : 1;
+    return {
+        width: Math.max(1, Math.min(level.width, widthRaw)),
+        height: Math.max(1, Math.min(level.height, heightRaw))
+    };
+}
+
+function getMainBoardSize(level = curLevel) {
+    if (!level) {
+        return { width: 1, height: 1 };
+    }
+    const widthRaw = isFinite(level.mainBoardWidth) ? Math.floor(level.mainBoardWidth) : level.width;
+    const heightRaw = isFinite(level.mainBoardHeight) ? Math.floor(level.mainBoardHeight) : level.height;
+    return {
+        width: Math.max(1, Math.min(level.width, widthRaw)),
+        height: Math.max(1, Math.min(level.height, heightRaw))
+    };
+}
+
 function redraw() {
     if (cellwidth===0||cellheight===0) {
         return;
@@ -657,10 +691,15 @@ function redrawCellGrid(curlevel) {
     if (isAnimating && debugSwitch.includes('tween')) console.log(`tween moveTween=${moveTween} animTween=${animTween} seedsToAnimate=`, seedsToAnimate, `currentMovedEntities=`, currentMovedEntities);
 
     const render = new RenderOrder(minMaxIJ);
-    if (!levelEditorOpened && !showLayers)
+    const extraDebugVisible = shouldShowExtraDebugBoard();
+    const extraDebugSize = extraDebugVisible ? getExtraDebugBoardSize(curlevel) : null;
+    const layoutBoardHeight = (extraDebugVisible && extraDebugSize) ? Math.max(screenheight, extraDebugSize.height) : screenheight;
+    if (!levelEditorOpened && !showLayers && !extraDebugVisible)
     //if (!levelEditorOpened)
         setClip(render);
     drawObjects(render);
+    if (extraDebugVisible)
+        drawExtraBoard(render);
 
     // show layer no
     if (showLayers) {
@@ -671,7 +710,7 @@ function redrawCellGrid(curlevel) {
 
     if (state.metadata.status_line)
         drawTextWithFont(ctx, statusText, state.fgcolor, 
-            xoffset + screenwidth * cellwidth / 2, yoffset + screenheight * cellheight + textcellheight * 0.6, textcellheight * 0.6);
+            xoffset + screenwidth * cellwidth / 2, yoffset + layoutBoardHeight * cellheight + textcellheight * 0.6, textcellheight * 0.6);
 
     if (diffToVisualize)
         drawDiffToVisualize();
@@ -776,6 +815,52 @@ function redrawCellGrid(curlevel) {
             }
         }
     } 
+
+    function drawExtraBoard(render) {
+        const extraBoardSize = getExtraDebugBoardSize(curLevel);
+        if (!extraBoardSize) {
+            return;
+        }
+        const boardShiftPixels = (screenwidth + 1) * cellwidth;
+
+        for (const group of state.collisionLayerGroups) {
+            for (let x = 0; x < extraBoardSize.width; x++) {
+                for (let y = 0; y < extraBoardSize.height; y++) {
+                    const posindex = y + x * curlevel.height;
+                    const posmask = curlevel.getCellInto(posindex, _o12);
+                    for (let k = group.firstObjectNo; k < group.firstObjectNo + group.numObjects; ++k) {
+                        const extraId = state.extraIdByBaseId ? state.extraIdByBaseId[k] : undefined;
+                        if (extraId === undefined || !posmask.get(extraId)) {
+                            continue;
+                        }
+
+                        const obj = state.objects[state.idDict[extraId]];
+                        const vector = obj.vector;
+                        const spriteSize = vector ? {
+                            w: (vector.w || 1) * cellwidth,
+                            h: (vector.h || 1) * cellheight,
+                        } : {
+                            w: obj.spritematrix.reduce((acc, row) => Math.max(acc, row.length), 0) * pixelSize,
+                            h: obj.spritematrix.length * pixelSize,
+                        };
+
+                        const drawpos = render.getDrawPos(posindex, obj);
+                        const rc = {
+                            x: Math.floor(drawpos.x + boardShiftPixels),
+                            y: Math.floor(drawpos.y),
+                            w: spriteSize.w,
+                            h: spriteSize.h
+                        };
+
+                        ctx.drawImage(
+                            spriteImages[extraId], 0, 0, spriteSize.w, spriteSize.h,
+                            rc.x, rc.y, rc.w, rc.h
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     // update animation parameters based on kind and dir, based on tween curve
     function calcAnimate(afx, kind, dir, params, tween) {
@@ -1109,8 +1194,9 @@ function canvasResize(level) {
     canvas.width = canvas.parentNode.clientWidth;
     canvas.height = canvas.parentNode.clientHeight;
 
-    screenwidth = level.width;        // board size, used to calculate cell size
-    screenheight = level.height;
+    const mainBoardSize = getMainBoardSize(level);
+    screenwidth = mainBoardSize.width;        // board size, used to calculate cell size
+    screenheight = mainBoardSize.height;
     if (!state) throw 'oops!';
 
     flickscreen=state.metadata.flickscreen!==undefined;
@@ -1137,10 +1223,16 @@ function canvasResize(level) {
     }
 
     statusLineHeight = state.metadata.status_line ? canvas.height / TITLE_HEIGHT : 0;
+    const extraDebugVisible = shouldShowExtraDebugBoard();
+    const extraBoardSize = getExtraDebugBoardSize(level);
+    const extraVisibleWidth = (extraDebugVisible && extraBoardSize) ? extraBoardSize.width : 0;
+    const extraVisibleHeight = (extraDebugVisible && extraBoardSize) ? extraBoardSize.height : 0;
+    const layoutScreenWidth = extraDebugVisible ? (screenwidth + 1 + extraVisibleWidth) : screenwidth;
+    const layoutScreenHeight = extraDebugVisible ? Math.max(screenheight, extraVisibleHeight) : screenheight;
 
     function recalcCellMetrics() {
-        cellwidth = canvas.width / screenwidth;
-        cellheight = (canvas.height - statusLineHeight) / screenheight;
+        cellwidth = canvas.width / layoutScreenWidth;
+        cellheight = (canvas.height - statusLineHeight) / layoutScreenHeight;
 
         // round the cell size as a multiple of sprite size
         let h = state.cell_height || state.sprite_size || 5;
@@ -1180,8 +1272,8 @@ function canvasResize(level) {
     }
     
     // calculate an XY offset to position the board on the screen
-    xoffset = (canvas.width - cellwidth * screenwidth) / 2;
-    yoffset = (canvas.height - statusLineHeight - cellheight * screenheight) / 2;
+    xoffset = (canvas.width - cellwidth * layoutScreenWidth) / 2;
+    yoffset = (canvas.height - statusLineHeight - cellheight * layoutScreenHeight) / 2;
     if (levelEditorOpened && !textMode) {
     	xoffset+=cellwidth;
     	yoffset+=cellheight*(1+editorRowCount);
