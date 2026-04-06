@@ -1234,9 +1234,11 @@ function levelAllObjects(state) {
 function levelsToArray(state) {
 	const levels = [];
     const links = [];
+    const sectionDeclarations = [];
     //const links = {};
     //const targets = new Set();
     let section, title, description, gotoFlag, input;
+    let levelTitleExplicit = false;
     let expectLayerGrid = false;
     let expectLayerLine = null;
     let expectExtraGrid = false;
@@ -1441,9 +1443,11 @@ function levelsToArray(state) {
             gotoFlag = true;
 		} else if (level[0] == 'section') {
             section = level[1];
+            sectionDeclarations.push(section);
             gotoFlag = false;
 		} else if (level[0] == 'level') {
             title = level[1];           // !!!
+            levelTitleExplicit = true;
 		} else if (level[0] == 'title') {
             description = level[1];     // todo: 
             logWarning(`Option TITLE is not implemented, but may be in the future. Let me know if you really need it.`,state.lineNumber);
@@ -1488,10 +1492,12 @@ function levelsToArray(state) {
                 if (!mergeLevelLayer(levels.at(-1), compiledLevel, level[0])) {
                     levels.push(compiledLevel);
                     levels.at(-1).title = title;
+                    levels.at(-1).isLabeledLevel = !!levelTitleExplicit;
                     levels.at(-1).linksTop = links.length;
                     if (input) levels.at(-1).input = input;
                     ++levelNo;
                     title = null;
+                    levelTitleExplicit = false;
                 }
                 expectLayerGrid = false;
                 expectLayerLine = null;
@@ -1505,10 +1511,12 @@ function levelsToArray(state) {
                 }
 			    levels.push(compiledLevel);
                 levels.at(-1).title = title;
+                levels.at(-1).isLabeledLevel = !!levelTitleExplicit;
                 levels.at(-1).linksTop = links.length;
                 if (input) levels.at(-1).input = input;
                 ++levelNo;
                 title = null;
+                levelTitleExplicit = false;
             }
 		}
 	});
@@ -1531,30 +1539,141 @@ function levelsToArray(state) {
     });
 	state.levels = levels;
 	state.links = links;
+    state.sectionDeclarations = sectionDeclarations;
 }
 
 function extractSections(state) {
 	var sections = [];
+    state.winSection = undefined;
 
+    // Sections discovered from actual level blocks (legacy behavior).
+    var levelSections = [];
 	var lastSection = null;
-
 	for(var i = 0; i < state.levels.length; i++) {
 		var level = state.levels[i];
 		
 		if(level.section != lastSection) {
 			var o = {
 				name: level.section,
-				firstLevel: i
+				firstLevel: i,
+                hasLevels: true
 			};
 			if(o.name == "__WIN__") {
 				state.winSection = o;
 			} else {
-				sections.push(o);
+				levelSections.push(o);
 			}
 			
 			lastSection = level.section;
 		}
 	}
+
+    // Prefer declaration order so empty/group-only sections are preserved.
+    const declarations = Array.isArray(state.sectionDeclarations) ? state.sectionDeclarations : [];
+    if (declarations.length > 0) {
+        let levelCursor = 0;
+        for (const declaredName of declarations) {
+            if (declaredName === "__WIN__") {
+                if (!state.winSection) {
+                    state.winSection = {
+                        name: "__WIN__",
+                        firstLevel: -1,
+                        hasLevels: false
+                    };
+                }
+                continue;
+            }
+
+            const entry = {
+                name: declaredName,
+                firstLevel: -1,
+                hasLevels: false
+            };
+
+            let matchedIndex = -1;
+            for (let j = levelCursor; j < levelSections.length; j++) {
+                if (levelSections[j].name === declaredName) {
+                    matchedIndex = j;
+                    break;
+                }
+            }
+            if (matchedIndex >= 0) {
+                entry.firstLevel = levelSections[matchedIndex].firstLevel;
+                entry.hasLevels = true;
+                levelCursor = matchedIndex + 1;
+            }
+            sections.push(entry);
+        }
+
+        // Keep any implicit sections that were never explicitly declared.
+        for (let j = levelCursor; j < levelSections.length; j++) {
+            sections.push(levelSections[j]);
+        }
+    } else {
+        sections = levelSections;
+    }
+
+	// Build optional hierarchy from leading "\" in section names.
+	// More leading "\" means deeper nesting, parent is the nearest previous
+	// section with fewer leading "\".
+	const countLeadingBackslashes = name => {
+		if (typeof name !== "string") return 0;
+		let depth = 0;
+		while (depth < name.length && name.charAt(depth) === "\\") depth++;
+		return depth;
+	};
+	const stripLeadingBackslashes = name => {
+		if (typeof name !== "string") return name;
+		return name.slice(countLeadingBackslashes(name));
+	};
+
+	for (let i = 0; i < sections.length; i++) {
+		const section = sections[i];
+		section.depth = countLeadingBackslashes(section.name);
+		const display = stripLeadingBackslashes(section.name);
+		section.displayName = (display === "") ? "\\" : display;
+		section.parentSection = -1;
+		section.childSections = [];
+        section.isDirectory = false;
+
+		if (section.depth > 0) {
+			for (let p = i - 1; p >= 0; p--) {
+				if ((sections[p].depth || 0) < section.depth) {
+					section.parentSection = p;
+					break;
+				}
+			}
+		}
+	}
+
+	for (let i = 0; i < sections.length; i++) {
+		const parentIndex = sections[i].parentSection;
+		if (parentIndex >= 0 && sections[parentIndex]) {
+			sections[parentIndex].childSections.push(i);
+		}
+	}
+
+    // Directory sections should still have a sensible firstLevel for GOTO.
+    const firstDescendantLevel = function(sectionIndex) {
+        const section = sections[sectionIndex];
+        if (!section) return -1;
+        if (section.firstLevel >= 0) return section.firstLevel;
+        let best = -1;
+        for (const childIndex of section.childSections) {
+            const childLevel = firstDescendantLevel(childIndex);
+            if (childLevel >= 0 && (best < 0 || childLevel < best)) {
+                best = childLevel;
+            }
+        }
+        return best;
+    };
+
+    for (let i = 0; i < sections.length; i++) {
+        sections[i].isDirectory = sections[i].childSections.length > 0;
+        if (sections[i].firstLevel < 0) {
+            sections[i].firstLevel = firstDescendantLevel(i);
+        }
+    }
 
 	state.sections = sections;
 }

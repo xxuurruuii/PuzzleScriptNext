@@ -124,13 +124,116 @@ function hasStartedTheGame() {
 	return (curLevelNo>0 || curlevelTarget !== null || storage_has(document.URL+'_checkpoint')) && (curLevelNo in state.levels);
 }
 
+function isMapLevelEntry(leveldat) {
+	return !!(leveldat
+		&& typeof leveldat === "object"
+		&& !("message" in leveldat)
+		&& !("target" in leveldat)
+		&& typeof leveldat.width === "number"
+		&& typeof leveldat.height === "number");
+}
+
+function isHiddenLabeledLevel(leveldat) {
+	return !!(state && state.metadata && state.metadata.hide_labeled_levels
+		&& isMapLevelEntry(leveldat)
+		&& leveldat.isLabeledLevel === true);
+}
+
+function getNextAutoLevelIndex(fromIndex) {
+	if (!state || !Array.isArray(state.levels)) {
+		return -1;
+	}
+	for (let i = fromIndex + 1; i < state.levels.length; i++) {
+		if (!isHiddenLabeledLevel(state.levels[i])) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+function getFirstSectionAutoLevelIndex(sectionName) {
+	if (!state || !Array.isArray(state.levels)) {
+		return -1;
+	}
+	for (let i = 0; i < state.levels.length; i++) {
+		const leveldat = state.levels[i];
+		if (!leveldat || leveldat.section !== sectionName) {
+			continue;
+		}
+		if (isHiddenLabeledLevel(leveldat)) {
+			continue;
+		}
+		return i;
+	}
+	return -1;
+}
+
+function sectionHasVisibleMapLevel(sectionName) {
+	if (!state || !Array.isArray(state.levels)) {
+		return false;
+	}
+	for (let i = 0; i < state.levels.length; i++) {
+		const leveldat = state.levels[i];
+		if (!leveldat || leveldat.section !== sectionName) {
+			continue;
+		}
+		if (!isMapLevelEntry(leveldat)) {
+			continue;
+		}
+		if (!isHiddenLabeledLevel(leveldat)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function isSectionProgressTarget(section) {
+	if (!section || section.isDirectory) {
+		return false;
+	}
+	if (!state || !state.metadata || !state.metadata.hide_labeled_levels) {
+		return true;
+	}
+	return sectionHasVisibleMapLevel(section.name);
+}
+
+function getSectionSolveTargets() {
+	if (!state || !Array.isArray(state.sections)) {
+		return [];
+	}
+	const hasDirectoryInfo = state.sections.some(s => typeof s.isDirectory === "boolean");
+	const candidateSections = hasDirectoryInfo
+		? state.sections.filter(s => !s.isDirectory)
+		: state.sections.slice();
+	return candidateSections.filter(isSectionProgressTarget);
+}
+
+function getSolvedTargetSectionCount() {
+	const targets = getSectionSolveTargets();
+	let count = 0;
+	for (const section of targets) {
+		if (solvedSections.indexOf(section.name) >= 0) {
+			count++;
+		}
+	}
+	return count;
+}
+
+function hasSolvedAllTargetSections() {
+	const targets = getSectionSolveTargets();
+	if (targets.length === 0) {
+		return false;
+	}
+	return getSolvedTargetSectionCount() >= targets.length;
+}
+
 function hasFinishedTheGame() {
-	return state.metadata.level_select && (solvedSections.length == state.sections.length)
+	return state.metadata.level_select && hasSolvedAllTargetSections()
 		|| curLevelNo >= state.levels.length; 
 }
 
 function hasSolvedAtLeastOneSection() {
-	return state.metadata.level_select && solvedSections.length > 0;
+	return state.metadata.level_select && getSolvedTargetSectionCount() > 0;
 }
 
 // call this before a new compile
@@ -361,6 +464,141 @@ function fillAndHighlight(image, highlight, hover, select) {
 
 let levelSelectScrollPos = 0;
 let levelHighlightLine = 0;
+let levelSelectCurrentParent = -1;
+let levelSelectEntries = [];
+
+function getSectionDisplayName(section) {
+	if (!section) return "";
+	const name = (section.displayName !== undefined) ? section.displayName : section.name;
+	return (name === undefined || name === null) ? "" : String(name);
+}
+
+function getSectionParentIndex(sectionIndex) {
+	const section = state.sections[sectionIndex];
+	if (!section) return -1;
+	return (typeof section.parentSection === "number") ? section.parentSection : -1;
+}
+
+function getSectionChildren(sectionIndex) {
+	if (!Array.isArray(state.sections)) {
+		return [];
+	}
+	const section = state.sections[sectionIndex];
+	if (!section) {
+		return [];
+	}
+	if (Array.isArray(section.childSections)) {
+		return section.childSections.slice();
+	}
+	return state.sections
+		.map((s, i) => ({ s, i }))
+		.filter(x => x.i !== sectionIndex && x.s.parentSection === sectionIndex)
+		.map(x => x.i);
+}
+
+function getSectionEntriesForParent(parentIndex) {
+	if (!Array.isArray(state.sections)) {
+		return [];
+	}
+
+	// Backward compatible: if hierarchy data is missing, keep flat list behaviour.
+	const hasHierarchy = state.sections.some(s => typeof s.parentSection === "number");
+	if (!hasHierarchy) {
+		return state.sections
+			.map((_, i) => i)
+			.filter(sectionAppearsInLevelSelect);
+	}
+
+	let entries;
+	if (parentIndex >= 0 && state.sections[parentIndex]) {
+		entries = getSectionChildren(parentIndex);
+	} else {
+		entries = state.sections
+			.map((s, i) => ({ s, i }))
+			.filter(x => (x.s.parentSection === -1 || x.s.parentSection === undefined))
+			.map(x => x.i);
+	}
+
+	return entries.filter(sectionAppearsInLevelSelect);
+}
+
+function refreshLevelSelectEntries() {
+	levelSelectEntries = getSectionEntriesForParent(levelSelectCurrentParent);
+	return levelSelectEntries;
+}
+
+function sectionHasChildren(sectionIndex) {
+	return getSectionChildren(sectionIndex).length > 0;
+}
+
+function sectionAppearsInLevelSelect(sectionIndex) {
+	const section = Array.isArray(state.sections) ? state.sections[sectionIndex] : null;
+	if (!section) {
+		return false;
+	}
+	if (!state || !state.metadata || !state.metadata.hide_labeled_levels) {
+		return true;
+	}
+	if (sectionHasChildren(sectionIndex)) {
+		const children = getSectionChildren(sectionIndex);
+		return children.some(sectionAppearsInLevelSelect);
+	}
+	return getFirstSectionAutoLevelIndex(section.name) >= 0;
+}
+
+function isSectionSolvedForLevelSelect(sectionIndex, memo = new Map(), stack = new Set()) {
+	if (memo.has(sectionIndex)) {
+		return memo.get(sectionIndex);
+	}
+	const section = Array.isArray(state.sections) ? state.sections[sectionIndex] : null;
+	if (!section) {
+		return false;
+	}
+	if (stack.has(sectionIndex)) {
+		return false;
+	}
+	stack.add(sectionIndex);
+	let solved = false;
+	const children = getSectionChildren(sectionIndex).filter(sectionAppearsInLevelSelect);
+	if (children.length > 0) {
+		solved = children.every(childIndex => isSectionSolvedForLevelSelect(childIndex, memo, stack));
+	} else {
+		solved = solvedSections.indexOf(section.name) >= 0;
+	}
+	stack.delete(sectionIndex);
+	memo.set(sectionIndex, solved);
+	return solved;
+}
+
+function levelSelectEnterDirectory(sectionIndex) {
+	if (sectionIndex == null || sectionIndex < 0 || !sectionHasChildren(sectionIndex)) {
+		return false;
+	}
+	levelSelectCurrentParent = sectionIndex;
+	levelSelectScrollPos = 0;
+	levelHighlightLine = 0;
+	titleSelection = null;
+	titleSelected = false;
+	quittingTitleScreen = false;
+	timer = 0;
+	generateLevelSelectScreen();
+	return true;
+}
+
+function levelSelectGoBack() {
+	if (levelSelectCurrentParent < 0) {
+		return false;
+	}
+	levelSelectCurrentParent = getSectionParentIndex(levelSelectCurrentParent);
+	levelSelectScrollPos = 0;
+	levelHighlightLine = 0;
+	titleSelection = null;
+	titleSelected = false;
+	quittingTitleScreen = false;
+	timer = 0;
+	generateLevelSelectScreen();
+	return true;
+}
 
 function gotoLevelSelectScreen() {
 	if(!state.metadata.level_select) {
@@ -369,6 +607,7 @@ function gotoLevelSelectScreen() {
 	}
 	levelSelectScrollPos = 0;
 	levelHighlightLine = 0;
+	levelSelectCurrentParent = -1;
 	titleSelected = false;
 	timer = 0;
 	quittingTitleScreen = false;
@@ -379,15 +618,25 @@ function gotoLevelSelectScreen() {
     againing = false;
 	messagetext = "";
 
+	let preferredSection = null;
 	if (titleSelection == null) {
 		for(var i = 0; i < state.sections.length; i++) {
 			if(state.sections[i].firstLevel > curLevelNo) {
-				titleSelection = Math.max(0,i-1);
-				if (debugSwitch.includes('menu')) console.log(`gotoLevelSelect curLevelNo=${curLevelNo} titleSelection=${titleSelection}`);
+				preferredSection = Math.max(0,i-1);
 				break;
 			}
 		}
-  	}
+		if (preferredSection == null && state.sections.length > 0) {
+			preferredSection = state.sections.length - 1;
+		}
+	} else if (typeof titleSelection === "number") {
+		preferredSection = titleSelection;
+	}
+
+	if (preferredSection != null && state.sections[preferredSection]) {
+		levelSelectCurrentParent = getSectionParentIndex(preferredSection);
+		titleSelection = preferredSection;
+	}
   
   	state.metadata = deepClone(state.default_metadata);
   	twiddleMetadataExtras();
@@ -398,58 +647,94 @@ function gotoLevelSelectScreen() {
 function generateLevelSelectScreen(hoverLine, scrollIncrement, selectLine) { 
 	if (debugSwitch.includes('menu')) console.log('generateLevelSelectScreen{ ', 'hoverLine=', hoverLine, 'scrollIncrement=', scrollIncrement, 'selectLine=', selectLine);
 	lineColorOverride = [];
+	const entries = refreshLevelSelectEntries();
 
 	// set initial highlight to current level
-	amountOfLevelsOnScreen = Math.min(9, state.sections.length);
-	if(titleSelection < levelSelectScrollPos) { //Up
-		levelSelectScrollPos = titleSelection;
-	} else if(titleSelection >= levelSelectScrollPos + amountOfLevelsOnScreen) { //Down
-		levelSelectScrollPos = titleSelection - amountOfLevelsOnScreen + 1;
+	amountOfLevelsOnScreen = Math.min(9, entries.length);
+	if (entries.length === 0) {
+		const screen = getLevelSelectScreen(["(empty)"]);
+		titleImage = fillAndHighlight(screen, -1, hoverLine, -1);
+		titleSelection = null;
+		const escText = levelSelectCurrentParent >= 0 ? "ESC:Up" : "ESC:Back";
+		titleImage[0] = (hoverLine == 0 ? `[  ${escText}  ]` : ` [ ${escText} ] `).padEnd(TITLE_WIDTH);
+		if (levelSelectCurrentParent >= 0) {
+			const parent = state.sections[levelSelectCurrentParent];
+			titleImage[1] = centerText(getSectionDisplayName(parent), TITLE_WIDTH);
+		}
+		redraw();
+		return;
 	}
 
-	var unlockedUntil = -1;
+	if (entries.indexOf(titleSelection) < 0) {
+		titleSelection = entries[0];
+	}
+
+	let selectedEntryPos = entries.indexOf(titleSelection);
+	if(selectedEntryPos < levelSelectScrollPos) { //Up
+		levelSelectScrollPos = selectedEntryPos;
+	} else if(selectedEntryPos >= levelSelectScrollPos + amountOfLevelsOnScreen) { //Down
+		levelSelectScrollPos = selectedEntryPos - amountOfLevelsOnScreen + 1;
+	}
+
+	let unlockedUntilProgress = -1;
+	let progressOrderBySection = new Map();
 	if (state.metadata.level_select_lock) {
-		// find last solved section:
-		let unsolvedSections = 0;
-		for(var i = 0; i < state.sections.length; i++) {
-			if(solvedSections.indexOf(state.sections[i].name) >= 0) {
-				unlockedUntil = i;
-			} else {
-				unsolvedSections++;
+		const progressSections = [];
+		for (let i = 0; i < state.sections.length; i++) {
+			if (isSectionProgressTarget(state.sections[i])) {
+				progressOrderBySection.set(i, progressSections.length);
+				progressSections.push(i);
 			}
 		}
+
+		let lastSolvedProgress = -1;
+		for (let p = 0; p < progressSections.length; p++) {
+			const sectionIndex = progressSections[p];
+			if (solvedSections.indexOf(state.sections[sectionIndex].name) >= 0) {
+				lastSolvedProgress = p;
+			}
+		}
+
 		if(state.metadata.level_select_unlocked_ahead !== undefined) {
-			unlockedUntil += state.metadata.level_select_unlocked_ahead;
+			unlockedUntilProgress = lastSolvedProgress + state.metadata.level_select_unlocked_ahead;
 		} else if (state.metadata.level_select_unlocked_rollover !== undefined) {
-			unlockedUntil = solvedSections.length + state.metadata.level_select_unlocked_rollover - 1;
+			unlockedUntilProgress = getSolvedTargetSectionCount() + state.metadata.level_select_unlocked_rollover - 1;
 		} else {
-			unlockedUntil += 1;
+			unlockedUntilProgress = lastSolvedProgress + 1;
 		}
 	}
 
 	//console.log(`levelHighlightLine=${levelHighlightLine} titleSelection=${titleSelection} levelSelectScrollPos=${levelSelectScrollPos}`)
-	if (levelHighlightLine == 0)
-		levelHighlightLine = 3 + titleSelection - levelSelectScrollPos;
+	if (levelHighlightLine == 0 || levelHighlightLine < 3 || levelHighlightLine > 3 + amountOfLevelsOnScreen - 1)
+		levelHighlightLine = 3 + selectedEntryPos - levelSelectScrollPos;
 	else if (levelHighlightLine > 3 && scrollIncrement < 0)
 		levelHighlightLine--;
 	else if (levelHighlightLine < 3 + amountOfLevelsOnScreen - 1 && scrollIncrement > 0)
 		levelHighlightLine++;
 	else if (levelSelectScrollPos > 0 && (levelHighlightLine == 3 || scrollIncrement < 0))
 		levelSelectScrollPos--;
-	else if (levelSelectScrollPos + amountOfLevelsOnScreen < state.sections.length 
+	else if (levelSelectScrollPos + amountOfLevelsOnScreen < entries.length 
 			 && (levelHighlightLine == 11 || scrollIncrement > 0) && !titleSelected)
 		levelSelectScrollPos++;
 
-	titleSelection = levelHighlightLine - 3 + levelSelectScrollPos;
+	selectedEntryPos = Math.max(0, Math.min(entries.length - 1, levelHighlightLine - 3 + levelSelectScrollPos));
+	titleSelection = entries[selectedEntryPos];
 
 	const solved_symbol = state.metadata.level_select_solve_symbol || "X";
+	const solvedMemo = new Map();
 
-	console.log(`titleSelected=${titleSelected} titleSelection=${titleSelection}`)
-	const lines = state.sections.map((section,i) => {
-		const solved = (solvedSections.indexOf(section.name) >= 0);
+	const lines = entries.map((sectionIndex, i) => {
+		const section = state.sections[sectionIndex];
+		const isDirectory = sectionHasChildren(sectionIndex);
+		const solved = isSectionSolvedForLevelSelect(sectionIndex, solvedMemo);
 		const selected = (i == selectLine + levelSelectScrollPos - 3);
-		const locked = (unlockedUntil >= 0 && i > unlockedUntil);
-		let name = locked ? "*".repeat(section.name.length) : section.name.substring(0, 24);
+		const progressOrder = progressOrderBySection.get(sectionIndex);
+		const locked = (progressOrder !== undefined && unlockedUntilProgress >= 0 && progressOrder > unlockedUntilProgress);
+		const rawName = getSectionDisplayName(section).substring(0, 24);
+		let name = locked ? "*".repeat(rawName.length) : rawName;
+		if (!locked && isDirectory) {
+			name = (name + "/").substring(0, 24);
+		}
 		//console.log(section, `i=${i} solved=${solved} locked=${locked} selected=${selected}`);
 
 		// kludge to avoid selecting locked level
@@ -461,8 +746,9 @@ function generateLevelSelectScreen(hoverLine, scrollIncrement, selectLine) {
 		}
 		
 		if (selected && !locked) {
-			if (i >= levelSelectScrollPos && i < levelSelectScrollPos + amountOfLevelsOnScreen)
-				titleSelection = i;
+			if (i >= levelSelectScrollPos && i < levelSelectScrollPos + amountOfLevelsOnScreen) {
+				titleSelection = sectionIndex;
+			}
 			return (solved ? solved_symbol : " ") + "#" + name.padEnd(24);
 		}
 		return (solved ? solved_symbol : " ") + " " + name.padEnd(24);
@@ -473,10 +759,15 @@ function generateLevelSelectScreen(hoverLine, scrollIncrement, selectLine) {
 	if (debugSwitch.includes('menu')) console.log(`generateLevelSelectScreen2 titleSelection=${titleSelection}`, `levelSelectScrollPos=${levelSelectScrollPos}`, screen);
 	titleImage = fillAndHighlight(screen, levelHighlightLine, hoverLine, selectLine);
 
-	titleImage[0] = (hoverLine == 0 ? "[  ESC:Back  ]" : " [ ESC:Back ] ").padEnd(TITLE_WIDTH);
+	const backLabel = levelSelectCurrentParent >= 0 ? "[ ESC:Up ] " : " [ ESC:Back ] ";
+	titleImage[0] = (hoverLine == 0 ? (levelSelectCurrentParent >= 0 ? "[  ESC:Up  ]" : "[  ESC:Back  ]") : backLabel).padEnd(TITLE_WIDTH);
+	if (levelSelectCurrentParent >= 0) {
+		const parent = state.sections[levelSelectCurrentParent];
+		titleImage[1] = centerText(getSectionDisplayName(parent), TITLE_WIDTH);
+	}
 	if (levelSelectScrollPos > 0)
 		titleImage[2] = (hoverLine == 2 ? "[  PREV  ]" : "[ PREV ] ").padStart(TITLE_WIDTH);
-	if (levelSelectScrollPos + amountOfLevelsOnScreen < lines.length)
+	if (levelSelectScrollPos + amountOfLevelsOnScreen < entries.length)
 		titleImage[12] = (hoverLine == 12 ? "[  NEXT  ]" : "[ NEXT ] ").padStart(TITLE_WIDTH);
 	redraw();
 }
@@ -486,6 +777,12 @@ function gotoLevel(index) {
 	if (debugSwitch.includes('load')) console.log(`gotoLevel(${index})`);
 	if (solving) return;
 	if (index == -9999) return;  // It's an invalid GOTO
+
+	if (index >= 0 && titleScreen && titleMode == 2 && sectionHasChildren(index)) {
+		levelSelectEnterDirectory(index);
+		canvasResize();
+		return;
+	}
   
 	againing = false;
 	messagetext = "";
@@ -495,7 +792,21 @@ function gotoLevel(index) {
 		//curLevelNo = -1; //???
 		curLevel = levelAllObjects(state);
 	} else {
-		curLevelNo = (index >= 0) ? state.sections[index].firstLevel : -1 - index;
+		if (index >= 0) {
+			const targetSection = state.sections[index];
+			if (!targetSection || targetSection.firstLevel == null || targetSection.firstLevel < 0) {
+				if (debugSwitch.includes('menu')) console.log(`gotoLevel skipped empty section`, index, targetSection);
+				return;
+			}
+			const sectionStart = getFirstSectionAutoLevelIndex(targetSection.name);
+			curLevelNo = sectionStart >= 0 ? sectionStart : targetSection.firstLevel;
+			if (curLevelNo < 0) {
+				if (debugSwitch.includes('menu')) console.log(`gotoLevel skipped hidden section`, index, targetSection);
+				return;
+			}
+		} else {
+			curLevelNo = -1 - index;
+		}
 		curlevelTarget = null; // #164
 		loadLevelFromStateOrTarget();
 	}
@@ -4378,7 +4689,8 @@ function nextLevel() {
 			loadLevelFromStateOrTarget();
 		} else if(isNewGameOptionSelected()) {
 			// new game
-			curLevelNo=0;
+			const firstAutoLevel = getNextAutoLevelIndex(-1);
+			curLevelNo = firstAutoLevel >= 0 ? firstAutoLevel : 0;
 			curlevelTarget=null;
 
 			if (state.metadata.level_select === undefined) {
@@ -4399,15 +4711,28 @@ function nextLevel() {
 			hasUsedCheckpoint=false;
 		}
 
-		if (curLevelNo<(state.levels.length-1)) {
+		const nextAutoLevelNo = getNextAutoLevelIndex(curLevelNo);
+		if (nextAutoLevelNo >= 0) {
 			var skip = false;
 			var curSection = state.levels[curLevelNo].section;
-			var nextSection = state.levels[curLevelNo+1].section;
+			var nextSection = state.levels[nextAutoLevelNo].section;
 			if(nextSection != curSection) {
 				setSectionSolved(state.levels[curLevelNo].section);
 
-				if(solvedSections.length == state.sections.length && state.winSection != undefined) {
-					curLevelNo = state.winSection.firstLevel - 1; // it's gonna be increased to match few lines below
+				if(hasSolvedAllTargetSections() && state.winSection != undefined) {
+					const winStart = getFirstSectionAutoLevelIndex("__WIN__");
+					if (winStart >= 0) {
+						curLevelNo = winStart;
+						curlevelTarget=null;
+						textMode=false;
+						titleScreen=false;
+						quittingMessageScreen=false;
+						loadLevelFromStateOrTarget();
+						skip = true;
+					} else if (nextSection == "__WIN__") {
+						gotoLevelSelectScreen();
+						skip = true;
+					}
 				} else if (nextSection == "__WIN__") {
 					gotoLevelSelectScreen();
 					skip = true;
@@ -4415,7 +4740,7 @@ function nextLevel() {
 			}
 
 			if(!skip) {
-				curLevelNo++;
+				curLevelNo = nextAutoLevelNo;
 				curlevelTarget=null;
 				textMode=false;
 				titleScreen=false;
@@ -4424,7 +4749,7 @@ function nextLevel() {
 				loadLevelFromStateOrTarget();
 			}
 		} else {
-			if (solvedSections.length == state.sections.length) {
+			if (hasSolvedAllTargetSections()) {
 				if (!state.metadata.level_select) {
 					// solved all
 					try {
@@ -4484,6 +4809,8 @@ function goToTitleScreen(){
 	}
 	
 	levelSelectScrollPos = 0;
+	levelSelectCurrentParent = -1;
+	levelSelectEntries = [];
 	generateTitleScreen();
 }
 
@@ -4518,7 +4845,14 @@ function setSectionSolved(section) {
 		return;
 	}
 
-	if(section.name == "__WIN__") {
+	if(section == "__WIN__") {
+		return;
+	}
+
+	const sectionMeta = Array.isArray(state.sections)
+		? state.sections.find(s => s && s.name === section)
+		: null;
+	if (sectionMeta && !isSectionProgressTarget(sectionMeta)) {
 		return;
 	}
 

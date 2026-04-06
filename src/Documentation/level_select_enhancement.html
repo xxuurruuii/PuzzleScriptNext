@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="">
+    <meta name="author" content="">
+    <link rel="shortcut icon" type="image/x-icon" href="ico/favicon.ico" />
+
+    <title>Level Select Enhancement - PuzzleScript Next Documentation</title>
+
+    <link href="css/bootstrap.css" rel="stylesheet">
+    <link href="css/bootstrap-theme.css" rel="stylesheet">
+  </head>
+
+  <body>
+
+    <div class="navbar navbar-inverse navbar-fixed-top">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="../index.html"><img src="../images/mascot_colorful.png">Puzzlescript Next</a>
+        </div>
+        <div class="collapse navbar-collapse">
+          <ul class="nav navbar-nav">
+              <li><a href="../editor.html">Make A Game</a></li>
+              <li class="active"><a href="documentation.html">Documentation</a></li>
+          </ul>
+          <ul class="nav navbar-nav navbar-right">
+            <li><a href="https://discord.gg/3uumegUV7y">Discord</a></li>
+            <li><a href="https://groups.google.com/g/puzzlescript">Forum</a></li>
+            <li><a href="https://github.com/david-pfx/PuzzleScriptNext">GitHub</a></li>
+            <li><a href="about.html">About</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+
+<p>
+<ol class="breadcrumb">
+  <li><a href="documentation.html">Documentation</a></li>
+  <li>New stuff in ps&gt;xr</li>
+  <li class="active">level select enhancement</li>
+</ol>
+<p>
+
+<h1>level select enhancement</h1>
+
+<h2>Recursive section folders</h2>
+<p>
+Sections in <b>LEVELS</b> can be grouped into folders using leading <b>\</b> in section names.
+A section with more leading <b>\</b> becomes a child of the nearest previous section with fewer <b>\</b>.
+</p>
+
+<pre><code>section World
+section \World 1
+section \World 2
+section \\World 2 - Bonus</code></pre>
+
+<ul>
+  <li>Entering a section that has child sections opens its folder view instead of starting a level.</li>
+  <li>Press <b>ESC</b> to go back to the parent folder.</li>
+</ul>
+
+<h2>Folder solved state</h2>
+<p>
+In level select, a folder is shown as solved when all of its visible child items are solved.
+This is recursive, so nested folders are included in the check.
+</p>
+
+<h2>hide_labeled_levels</h2>
+<p>
+Add <b>hide_labeled_levels</b> in the prelude to hide map levels that are explicitly labeled with <b>LEVEL ...</b>.
+</p>
+
+<pre><code>hide_labeled_levels
+
+level Secret Stage
+.......
+..P....
+.......</code></pre>
+
+<h3>What changes when enabled</h3>
+<ul>
+  <li>These labeled levels are skipped by normal win-to-next progression.</li>
+  <li>They are excluded from section completion statistics in level select.</li>
+  <li>Sections/folders that only contain hidden labeled levels are not shown in level select.</li>
+</ul>
+
+<h3>What does not change</h3>
+<ul>
+  <li>Explicit jumps (for example through <b>goto</b>/<b>link</b>) can still reach those levels if your game logic targets them.</li>
+</ul>
+
+    </div>
+
+    <script src="js/jquery.js"></script>
+    <script src="js/bootstrap.min.js"></script>
+  </body>
+</html>

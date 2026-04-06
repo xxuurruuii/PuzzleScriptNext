@@ -671,19 +671,21 @@ function mouseAction(event,click,id) {
 			} else if (titleMode===2) { //Level select
 				generateLevelSelectScreen(mouseCoordY);
 				if (mouseCoordY == 0) {			// ESC back
-					goToTitleScreen();
-					tryPlayTitleSound();
+					if (!levelSelectGoBack()) {
+						goToTitleScreen();
+						tryPlayTitleSound();
+					}
 				} else if (mouseCoordY == 2) {
 					if (levelSelectScrollPos != 0) {
-						levelSelectScroll(-3)
+						generateLevelSelectScreen(-1, -1)
 					}
 				} else if (mouseCoordY == 12) {
-					if (state.sections.length - amountOfLevelsOnScreen > levelSelectScrollPos) {
-						levelSelectScroll(3)
+					if (levelSelectEntries.length - amountOfLevelsOnScreen > levelSelectScrollPos) {
+						generateLevelSelectScreen(-1, 1)
 					}
 				} else if (mouseCoordY > 2 && mouseCoordY < 12) {
 					const clickedLevel = mouseCoordY - 3 + levelSelectScrollPos;
-					if (clickedLevel < state.sections.length) {
+					if (clickedLevel < levelSelectEntries.length) {
 						// do this first, because it will get cancelled if locked
 						if (titleSelection != null) {
 							titleSelected=true;
@@ -1412,10 +1414,15 @@ function checkKey(e,justPressed) {
 			} else if (!titleScreen || titleMode > 1) {
 				if ((timer/1000>0.5 || titleMode > 1) && !quittingTitleScreen && justPressed) {
 
-					titleSelection = 0;
-					
 					timer = 0;
-					if(!titleScreen && state.metadata.level_select) {
+
+					if (titleScreen && titleMode === 2 && state.metadata.level_select && levelSelectGoBack()) {
+						canvasResize();
+						return prevent(e);
+					}
+
+					titleSelection = 0;
+					if (!titleScreen && state.metadata.level_select) {
 						titleSelection = null;
 						gotoLevelSelectScreen();
 					} else {

@@ -62,6 +62,7 @@
             ["runtime_border_twiddling", "", "Allows BORDER command to resize the current level at runtime using rules"],
             ["extra_board", "", "Enables a hidden extra board that can be targeted in rules using the EXTRA qualifier"],
             ["extra_debug", "", "When EXTRA_BOARD is enabled, shows the hidden extra board to the right for debugging"],
+            ["hide_labeled_levels", "", "Hides map levels preceded by LEVEL lines from auto-next progression and completion counts"],
             ["actionkey", "<key> <object>", "Pressing <key> will place <object> on every player tile, then run one turn"],
             ["skip_title_screen", "", "Will skip the title screen when the game initializes, booting straight into the level or level select"],
             ["tween_length", "0.05", "Will animate objects that are moving using LEFT, RIGHT, UP, and DOWN. Duration in seconds."],

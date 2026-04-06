@@ -9565,13 +9565,116 @@ function hasStartedTheGame() {
 	return (curLevelNo>0 || curlevelTarget !== null || storage_has(document.URL+'_checkpoint')) && (curLevelNo in state.levels);
 }
 
+function isMapLevelEntry(leveldat) {
+	return !!(leveldat
+		&& typeof leveldat === "object"
+		&& !("message" in leveldat)
+		&& !("target" in leveldat)
+		&& typeof leveldat.width === "number"
+		&& typeof leveldat.height === "number");
+}
+
+function isHiddenLabeledLevel(leveldat) {
+	return !!(state && state.metadata && state.metadata.hide_labeled_levels
+		&& isMapLevelEntry(leveldat)
+		&& leveldat.isLabeledLevel === true);
+}
+
+function getNextAutoLevelIndex(fromIndex) {
+	if (!state || !Array.isArray(state.levels)) {
+		return -1;
+	}
+	for (let i = fromIndex + 1; i < state.levels.length; i++) {
+		if (!isHiddenLabeledLevel(state.levels[i])) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+function getFirstSectionAutoLevelIndex(sectionName) {
+	if (!state || !Array.isArray(state.levels)) {
+		return -1;
+	}
+	for (let i = 0; i < state.levels.length; i++) {
+		const leveldat = state.levels[i];
+		if (!leveldat || leveldat.section !== sectionName) {
+			continue;
+		}
+		if (isHiddenLabeledLevel(leveldat)) {
+			continue;
+		}
+		return i;
+	}
+	return -1;
+}
+
+function sectionHasVisibleMapLevel(sectionName) {
+	if (!state || !Array.isArray(state.levels)) {
+		return false;
+	}
+	for (let i = 0; i < state.levels.length; i++) {
+		const leveldat = state.levels[i];
+		if (!leveldat || leveldat.section !== sectionName) {
+			continue;
+		}
+		if (!isMapLevelEntry(leveldat)) {
+			continue;
+		}
+		if (!isHiddenLabeledLevel(leveldat)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function isSectionProgressTarget(section) {
+	if (!section || section.isDirectory) {
+		return false;
+	}
+	if (!state || !state.metadata || !state.metadata.hide_labeled_levels) {
+		return true;
+	}
+	return sectionHasVisibleMapLevel(section.name);
+}
+
+function getSectionSolveTargets() {
+	if (!state || !Array.isArray(state.sections)) {
+		return [];
+	}
+	const hasDirectoryInfo = state.sections.some(s => typeof s.isDirectory === "boolean");
+	const candidateSections = hasDirectoryInfo
+		? state.sections.filter(s => !s.isDirectory)
+		: state.sections.slice();
+	return candidateSections.filter(isSectionProgressTarget);
+}
+
+function getSolvedTargetSectionCount() {
+	const targets = getSectionSolveTargets();
+	let count = 0;
+	for (const section of targets) {
+		if (solvedSections.indexOf(section.name) >= 0) {
+			count++;
+		}
+	}
+	return count;
+}
+
+function hasSolvedAllTargetSections() {
+	const targets = getSectionSolveTargets();
+	if (targets.length === 0) {
+		return false;
+	}
+	return getSolvedTargetSectionCount() >= targets.length;
+}
+
 function hasFinishedTheGame() {
-	return state.metadata.level_select && (solvedSections.length == state.sections.length)
+	return state.metadata.level_select && hasSolvedAllTargetSections()
 		|| curLevelNo >= state.levels.length; 
 }
 
 function hasSolvedAtLeastOneSection() {
-	return state.metadata.level_select && solvedSections.length > 0;
+	return state.metadata.level_select && getSolvedTargetSectionCount() > 0;
 }
 
 // call this before a new compile
@@ -9802,6 +9905,141 @@ function fillAndHighlight(image, highlight, hover, select) {
 
 let levelSelectScrollPos = 0;
 let levelHighlightLine = 0;
+let levelSelectCurrentParent = -1;
+let levelSelectEntries = [];
+
+function getSectionDisplayName(section) {
+	if (!section) return "";
+	const name = (section.displayName !== undefined) ? section.displayName : section.name;
+	return (name === undefined || name === null) ? "" : String(name);
+}
+
+function getSectionParentIndex(sectionIndex) {
+	const section = state.sections[sectionIndex];
+	if (!section) return -1;
+	return (typeof section.parentSection === "number") ? section.parentSection : -1;
+}
+
+function getSectionChildren(sectionIndex) {
+	if (!Array.isArray(state.sections)) {
+		return [];
+	}
+	const section = state.sections[sectionIndex];
+	if (!section) {
+		return [];
+	}
+	if (Array.isArray(section.childSections)) {
+		return section.childSections.slice();
+	}
+	return state.sections
+		.map((s, i) => ({ s, i }))
+		.filter(x => x.i !== sectionIndex && x.s.parentSection === sectionIndex)
+		.map(x => x.i);
+}
+
+function getSectionEntriesForParent(parentIndex) {
+	if (!Array.isArray(state.sections)) {
+		return [];
+	}
+
+	// Backward compatible: if hierarchy data is missing, keep flat list behaviour.
+	const hasHierarchy = state.sections.some(s => typeof s.parentSection === "number");
+	if (!hasHierarchy) {
+		return state.sections
+			.map((_, i) => i)
+			.filter(sectionAppearsInLevelSelect);
+	}
+
+	let entries;
+	if (parentIndex >= 0 && state.sections[parentIndex]) {
+		entries = getSectionChildren(parentIndex);
+	} else {
+		entries = state.sections
+			.map((s, i) => ({ s, i }))
+			.filter(x => (x.s.parentSection === -1 || x.s.parentSection === undefined))
+			.map(x => x.i);
+	}
+
+	return entries.filter(sectionAppearsInLevelSelect);
+}
+
+function refreshLevelSelectEntries() {
+	levelSelectEntries = getSectionEntriesForParent(levelSelectCurrentParent);
+	return levelSelectEntries;
+}
+
+function sectionHasChildren(sectionIndex) {
+	return getSectionChildren(sectionIndex).length > 0;
+}
+
+function sectionAppearsInLevelSelect(sectionIndex) {
+	const section = Array.isArray(state.sections) ? state.sections[sectionIndex] : null;
+	if (!section) {
+		return false;
+	}
+	if (!state || !state.metadata || !state.metadata.hide_labeled_levels) {
+		return true;
+	}
+	if (sectionHasChildren(sectionIndex)) {
+		const children = getSectionChildren(sectionIndex);
+		return children.some(sectionAppearsInLevelSelect);
+	}
+	return getFirstSectionAutoLevelIndex(section.name) >= 0;
+}
+
+function isSectionSolvedForLevelSelect(sectionIndex, memo = new Map(), stack = new Set()) {
+	if (memo.has(sectionIndex)) {
+		return memo.get(sectionIndex);
+	}
+	const section = Array.isArray(state.sections) ? state.sections[sectionIndex] : null;
+	if (!section) {
+		return false;
+	}
+	if (stack.has(sectionIndex)) {
+		return false;
+	}
+	stack.add(sectionIndex);
+	let solved = false;
+	const children = getSectionChildren(sectionIndex).filter(sectionAppearsInLevelSelect);
+	if (children.length > 0) {
+		solved = children.every(childIndex => isSectionSolvedForLevelSelect(childIndex, memo, stack));
+	} else {
+		solved = solvedSections.indexOf(section.name) >= 0;
+	}
+	stack.delete(sectionIndex);
+	memo.set(sectionIndex, solved);
+	return solved;
+}
+
+function levelSelectEnterDirectory(sectionIndex) {
+	if (sectionIndex == null || sectionIndex < 0 || !sectionHasChildren(sectionIndex)) {
+		return false;
+	}
+	levelSelectCurrentParent = sectionIndex;
+	levelSelectScrollPos = 0;
+	levelHighlightLine = 0;
+	titleSelection = null;
+	titleSelected = false;
+	quittingTitleScreen = false;
+	timer = 0;
+	generateLevelSelectScreen();
+	return true;
+}
+
+function levelSelectGoBack() {
+	if (levelSelectCurrentParent < 0) {
+		return false;
+	}
+	levelSelectCurrentParent = getSectionParentIndex(levelSelectCurrentParent);
+	levelSelectScrollPos = 0;
+	levelHighlightLine = 0;
+	titleSelection = null;
+	titleSelected = false;
+	quittingTitleScreen = false;
+	timer = 0;
+	generateLevelSelectScreen();
+	return true;
+}
 
 function gotoLevelSelectScreen() {
 	if(!state.metadata.level_select) {
@@ -9810,6 +10048,7 @@ function gotoLevelSelectScreen() {
 	}
 	levelSelectScrollPos = 0;
 	levelHighlightLine = 0;
+	levelSelectCurrentParent = -1;
 	titleSelected = false;
 	timer = 0;
 	quittingTitleScreen = false;
@@ -9820,15 +10059,25 @@ function gotoLevelSelectScreen() {
     againing = false;
 	messagetext = "";
 
+	let preferredSection = null;
 	if (titleSelection == null) {
 		for(var i = 0; i < state.sections.length; i++) {
 			if(state.sections[i].firstLevel > curLevelNo) {
-				titleSelection = Math.max(0,i-1);
-				if (debugSwitch.includes('menu')) console.log(`gotoLevelSelect curLevelNo=${curLevelNo} titleSelection=${titleSelection}`);
+				preferredSection = Math.max(0,i-1);
 				break;
 			}
 		}
-  	}
+		if (preferredSection == null && state.sections.length > 0) {
+			preferredSection = state.sections.length - 1;
+		}
+	} else if (typeof titleSelection === "number") {
+		preferredSection = titleSelection;
+	}
+
+	if (preferredSection != null && state.sections[preferredSection]) {
+		levelSelectCurrentParent = getSectionParentIndex(preferredSection);
+		titleSelection = preferredSection;
+	}
   
   	state.metadata = deepClone(state.default_metadata);
   	twiddleMetadataExtras();
@@ -9839,58 +10088,94 @@ function gotoLevelSelectScreen() {
 function generateLevelSelectScreen(hoverLine, scrollIncrement, selectLine) { 
 	if (debugSwitch.includes('menu')) console.log('generateLevelSelectScreen{ ', 'hoverLine=', hoverLine, 'scrollIncrement=', scrollIncrement, 'selectLine=', selectLine);
 	lineColorOverride = [];
+	const entries = refreshLevelSelectEntries();
 
 	// set initial highlight to current level
-	amountOfLevelsOnScreen = Math.min(9, state.sections.length);
-	if(titleSelection < levelSelectScrollPos) { //Up
-		levelSelectScrollPos = titleSelection;
-	} else if(titleSelection >= levelSelectScrollPos + amountOfLevelsOnScreen) { //Down
-		levelSelectScrollPos = titleSelection - amountOfLevelsOnScreen + 1;
+	amountOfLevelsOnScreen = Math.min(9, entries.length);
+	if (entries.length === 0) {
+		const screen = getLevelSelectScreen(["(empty)"]);
+		titleImage = fillAndHighlight(screen, -1, hoverLine, -1);
+		titleSelection = null;
+		const escText = levelSelectCurrentParent >= 0 ? "ESC:Up" : "ESC:Back";
+		titleImage[0] = (hoverLine == 0 ? `[  ${escText}  ]` : ` [ ${escText} ] `).padEnd(TITLE_WIDTH);
+		if (levelSelectCurrentParent >= 0) {
+			const parent = state.sections[levelSelectCurrentParent];
+			titleImage[1] = centerText(getSectionDisplayName(parent), TITLE_WIDTH);
+		}
+		redraw();
+		return;
 	}
 
-	var unlockedUntil = -1;
+	if (entries.indexOf(titleSelection) < 0) {
+		titleSelection = entries[0];
+	}
+
+	let selectedEntryPos = entries.indexOf(titleSelection);
+	if(selectedEntryPos < levelSelectScrollPos) { //Up
+		levelSelectScrollPos = selectedEntryPos;
+	} else if(selectedEntryPos >= levelSelectScrollPos + amountOfLevelsOnScreen) { //Down
+		levelSelectScrollPos = selectedEntryPos - amountOfLevelsOnScreen + 1;
+	}
+
+	let unlockedUntilProgress = -1;
+	let progressOrderBySection = new Map();
 	if (state.metadata.level_select_lock) {
-		// find last solved section:
-		let unsolvedSections = 0;
-		for(var i = 0; i < state.sections.length; i++) {
-			if(solvedSections.indexOf(state.sections[i].name) >= 0) {
-				unlockedUntil = i;
-			} else {
-				unsolvedSections++;
+		const progressSections = [];
+		for (let i = 0; i < state.sections.length; i++) {
+			if (isSectionProgressTarget(state.sections[i])) {
+				progressOrderBySection.set(i, progressSections.length);
+				progressSections.push(i);
 			}
 		}
+
+		let lastSolvedProgress = -1;
+		for (let p = 0; p < progressSections.length; p++) {
+			const sectionIndex = progressSections[p];
+			if (solvedSections.indexOf(state.sections[sectionIndex].name) >= 0) {
+				lastSolvedProgress = p;
+			}
+		}
+
 		if(state.metadata.level_select_unlocked_ahead !== undefined) {
-			unlockedUntil += state.metadata.level_select_unlocked_ahead;
+			unlockedUntilProgress = lastSolvedProgress + state.metadata.level_select_unlocked_ahead;
 		} else if (state.metadata.level_select_unlocked_rollover !== undefined) {
-			unlockedUntil = solvedSections.length + state.metadata.level_select_unlocked_rollover - 1;
+			unlockedUntilProgress = getSolvedTargetSectionCount() + state.metadata.level_select_unlocked_rollover - 1;
 		} else {
-			unlockedUntil += 1;
+			unlockedUntilProgress = lastSolvedProgress + 1;
 		}
 	}
 
 	//console.log(`levelHighlightLine=${levelHighlightLine} titleSelection=${titleSelection} levelSelectScrollPos=${levelSelectScrollPos}`)
-	if (levelHighlightLine == 0)
-		levelHighlightLine = 3 + titleSelection - levelSelectScrollPos;
+	if (levelHighlightLine == 0 || levelHighlightLine < 3 || levelHighlightLine > 3 + amountOfLevelsOnScreen - 1)
+		levelHighlightLine = 3 + selectedEntryPos - levelSelectScrollPos;
 	else if (levelHighlightLine > 3 && scrollIncrement < 0)
 		levelHighlightLine--;
 	else if (levelHighlightLine < 3 + amountOfLevelsOnScreen - 1 && scrollIncrement > 0)
 		levelHighlightLine++;
 	else if (levelSelectScrollPos > 0 && (levelHighlightLine == 3 || scrollIncrement < 0))
 		levelSelectScrollPos--;
-	else if (levelSelectScrollPos + amountOfLevelsOnScreen < state.sections.length 
+	else if (levelSelectScrollPos + amountOfLevelsOnScreen < entries.length 
 			 && (levelHighlightLine == 11 || scrollIncrement > 0) && !titleSelected)
 		levelSelectScrollPos++;
 
-	titleSelection = levelHighlightLine - 3 + levelSelectScrollPos;
+	selectedEntryPos = Math.max(0, Math.min(entries.length - 1, levelHighlightLine - 3 + levelSelectScrollPos));
+	titleSelection = entries[selectedEntryPos];
 
 	const solved_symbol = state.metadata.level_select_solve_symbol || "X";
+	const solvedMemo = new Map();
 
-	console.log(`titleSelected=${titleSelected} titleSelection=${titleSelection}`)
-	const lines = state.sections.map((section,i) => {
-		const solved = (solvedSections.indexOf(section.name) >= 0);
+	const lines = entries.map((sectionIndex, i) => {
+		const section = state.sections[sectionIndex];
+		const isDirectory = sectionHasChildren(sectionIndex);
+		const solved = isSectionSolvedForLevelSelect(sectionIndex, solvedMemo);
 		const selected = (i == selectLine + levelSelectScrollPos - 3);
-		const locked = (unlockedUntil >= 0 && i > unlockedUntil);
-		let name = locked ? "*".repeat(section.name.length) : section.name.substring(0, 24);
+		const progressOrder = progressOrderBySection.get(sectionIndex);
+		const locked = (progressOrder !== undefined && unlockedUntilProgress >= 0 && progressOrder > unlockedUntilProgress);
+		const rawName = getSectionDisplayName(section).substring(0, 24);
+		let name = locked ? "*".repeat(rawName.length) : rawName;
+		if (!locked && isDirectory) {
+			name = (name + "/").substring(0, 24);
+		}
 		//console.log(section, `i=${i} solved=${solved} locked=${locked} selected=${selected}`);
 
 		// kludge to avoid selecting locked level
@@ -9902,8 +10187,9 @@ function generateLevelSelectScreen(hoverLine, scrollIncrement, selectLine) {
 		}
 		
 		if (selected && !locked) {
-			if (i >= levelSelectScrollPos && i < levelSelectScrollPos + amountOfLevelsOnScreen)
-				titleSelection = i;
+			if (i >= levelSelectScrollPos && i < levelSelectScrollPos + amountOfLevelsOnScreen) {
+				titleSelection = sectionIndex;
+			}
 			return (solved ? solved_symbol : " ") + "#" + name.padEnd(24);
 		}
 		return (solved ? solved_symbol : " ") + " " + name.padEnd(24);
@@ -9914,10 +10200,15 @@ function generateLevelSelectScreen(hoverLine, scrollIncrement, selectLine) {
 	if (debugSwitch.includes('menu')) console.log(`generateLevelSelectScreen2 titleSelection=${titleSelection}`, `levelSelectScrollPos=${levelSelectScrollPos}`, screen);
 	titleImage = fillAndHighlight(screen, levelHighlightLine, hoverLine, selectLine);
 
-	titleImage[0] = (hoverLine == 0 ? "[  ESC:Back  ]" : " [ ESC:Back ] ").padEnd(TITLE_WIDTH);
+	const backLabel = levelSelectCurrentParent >= 0 ? "[ ESC:Up ] " : " [ ESC:Back ] ";
+	titleImage[0] = (hoverLine == 0 ? (levelSelectCurrentParent >= 0 ? "[  ESC:Up  ]" : "[  ESC:Back  ]") : backLabel).padEnd(TITLE_WIDTH);
+	if (levelSelectCurrentParent >= 0) {
+		const parent = state.sections[levelSelectCurrentParent];
+		titleImage[1] = centerText(getSectionDisplayName(parent), TITLE_WIDTH);
+	}
 	if (levelSelectScrollPos > 0)
 		titleImage[2] = (hoverLine == 2 ? "[  PREV  ]" : "[ PREV ] ").padStart(TITLE_WIDTH);
-	if (levelSelectScrollPos + amountOfLevelsOnScreen < lines.length)
+	if (levelSelectScrollPos + amountOfLevelsOnScreen < entries.length)
 		titleImage[12] = (hoverLine == 12 ? "[  NEXT  ]" : "[ NEXT ] ").padStart(TITLE_WIDTH);
 	redraw();
 }
@@ -9927,6 +10218,12 @@ function gotoLevel(index) {
 	if (debugSwitch.includes('load')) console.log(`gotoLevel(${index})`);
 	if (solving) return;
 	if (index == -9999) return;  // It's an invalid GOTO
+
+	if (index >= 0 && titleScreen && titleMode == 2 && sectionHasChildren(index)) {
+		levelSelectEnterDirectory(index);
+		canvasResize();
+		return;
+	}
   
 	againing = false;
 	messagetext = "";
@@ -9936,7 +10233,21 @@ function gotoLevel(index) {
 		//curLevelNo = -1; //???
 		curLevel = levelAllObjects(state);
 	} else {
-		curLevelNo = (index >= 0) ? state.sections[index].firstLevel : -1 - index;
+		if (index >= 0) {
+			const targetSection = state.sections[index];
+			if (!targetSection || targetSection.firstLevel == null || targetSection.firstLevel < 0) {
+				if (debugSwitch.includes('menu')) console.log(`gotoLevel skipped empty section`, index, targetSection);
+				return;
+			}
+			const sectionStart = getFirstSectionAutoLevelIndex(targetSection.name);
+			curLevelNo = sectionStart >= 0 ? sectionStart : targetSection.firstLevel;
+			if (curLevelNo < 0) {
+				if (debugSwitch.includes('menu')) console.log(`gotoLevel skipped hidden section`, index, targetSection);
+				return;
+			}
+		} else {
+			curLevelNo = -1 - index;
+		}
 		curlevelTarget = null; // #164
 		loadLevelFromStateOrTarget();
 	}
@@ -10413,6 +10724,10 @@ function level4Serialization() {
 		dat : Array.from(curLevel.objects),
 		width : curLevel.width,
 		height : curLevel.height,
+		mainBoardWidth: curLevel.mainBoardWidth,
+		mainBoardHeight: curLevel.mainBoardHeight,
+		extraBoardWidth: curLevel.extraBoardWidth,
+		extraBoardHeight: curLevel.extraBoardHeight,
 		oldflickscreendat: oldflickscreendat.concat([]),
     	cameraPositionTarget: Object.assign({}, cameraPositionTarget),
 		levelNo: curLevelNo,
@@ -10620,6 +10935,7 @@ function RebuildLevelArrays() {
 	_m1 = new BitVec(STRIDE_MOV);
 	_m2 = new BitVec(STRIDE_MOV);
 	_m3 = new BitVec(STRIDE_MOV);
+	_m4 = new BitVec(STRIDE_MOV);
 	
 
     for (var i=0;i<curLevel.height;i++) {
@@ -10682,6 +10998,10 @@ function unconsolidateDiff(before,after) {
 		dat: after_objects,
 		width: before.width,
 		height: before.height,
+		mainBoardWidth: before.mainBoardWidth,
+		mainBoardHeight: before.mainBoardHeight,
+		extraBoardWidth: before.extraBoardWidth,
+		extraBoardHeight: before.extraBoardHeight,
 		oldflickscreendat: before.oldflickscreendat
 	}
 }
@@ -10732,6 +11052,23 @@ function restoreLevel(lev, snapCamera, resetTween = true, resetAutoTick = true) 
 	    	var ccc = curLevel.colCellContents[i];
 	    	ccc.setZero();
 	    }
+	}
+
+	const currentMainWidth = isFinite(curLevel.mainBoardWidth) ? Math.floor(curLevel.mainBoardWidth) : curLevel.width;
+	const currentMainHeight = isFinite(curLevel.mainBoardHeight) ? Math.floor(curLevel.mainBoardHeight) : curLevel.height;
+	const loadedMainWidth = isFinite(lev.mainBoardWidth) ? Math.floor(lev.mainBoardWidth) : currentMainWidth;
+	const loadedMainHeight = isFinite(lev.mainBoardHeight) ? Math.floor(lev.mainBoardHeight) : currentMainHeight;
+	curLevel.mainBoardWidth = Math.max(1, Math.min(curLevel.width, loadedMainWidth));
+	curLevel.mainBoardHeight = Math.max(1, Math.min(curLevel.height, loadedMainHeight));
+
+	if (state && state.extraBoardEnabled) {
+		const currentExtraWidth = isFinite(curLevel.extraBoardWidth) ? Math.floor(curLevel.extraBoardWidth) : 1;
+		const currentExtraHeight = isFinite(curLevel.extraBoardHeight) ? Math.floor(curLevel.extraBoardHeight) : 1;
+		const extraWidth = isFinite(lev.extraBoardWidth) ? Math.floor(lev.extraBoardWidth) : currentExtraWidth;
+		const extraHeight = isFinite(lev.extraBoardHeight) ? Math.floor(lev.extraBoardHeight) : currentExtraHeight;
+		curLevel.extraBoardWidth = Math.max(1, Math.min(curLevel.width, extraWidth));
+		curLevel.extraBoardHeight = Math.max(1, Math.min(curLevel.height, extraHeight));
+		pruneObjectsOutsideBoardBounds(curLevel);
 	}
 
     if (lev.cameraPositionTarget) {
@@ -10826,6 +11163,10 @@ function consolidateDiff(before,after){
 		dat : result,
 		width : before.width,
 		height : before.height,
+		mainBoardWidth: before.mainBoardWidth,
+		mainBoardHeight: before.mainBoardHeight,
+		extraBoardWidth: before.extraBoardWidth,
+		extraBoardHeight: before.extraBoardHeight,
 		oldflickscreendat: before.oldflickscreendat,
 		metadata: before.metadata,
 	}
@@ -11011,6 +11352,31 @@ function getLayersOfMask(cellMask) {
     return layers;
 }
 
+function getBoardBoundsForLayer(layer, level = curLevel) {
+    if (!level) {
+        return { xmin: 0, ymin: 0, xmax: 0, ymax: 0 };
+    }
+
+    if (!state || !state.extraBoardEnabled) {
+        return { xmin: 0, ymin: 0, xmax: level.width, ymax: level.height };
+    }
+
+    const split = isFinite(state.extraBaseLayerCount) ? state.extraBaseLayerCount : level.layerCount;
+    if (layer >= split) {
+        const extraBounds = getExtraBoardBounds(level);
+        if (extraBounds) {
+            return { xmin: 0, ymin: 0, xmax: extraBounds.width, ymax: extraBounds.height };
+        }
+    } else {
+        const mainBounds = getMainBoardBounds(level);
+        if (mainBounds) {
+            return { xmin: 0, ymin: 0, xmax: mainBounds.width, ymax: mainBounds.height };
+        }
+    }
+
+    return { xmin: 0, ymin: 0, xmax: level.width, ymax: level.height };
+}
+
 function moveEntitiesAtIndex(positionIndex, entityMask, dirMask) {
     var cellMask = curLevel.getCell(positionIndex);
     cellMask.iand(entityMask);
@@ -11052,10 +11418,17 @@ function repositionEntitiesOnLayer(positionIndex,layer,dirMask)
     var dy = delta[1];
     var tx = ((positionIndex/curLevel.height)|0);
     var ty = ((positionIndex%curLevel.height));
-    var maxx = curLevel.width-1;
-    var maxy = curLevel.height-1;
+    const bounds = getBoardBoundsForLayer(layer, curLevel);
+    const minx = bounds.xmin;
+    const miny = bounds.ymin;
+    const maxx = bounds.xmax - 1;
+    const maxy = bounds.ymax - 1;
 
-    if ( (tx===0&&dx<0) || (tx===maxx&&dx>0) || (ty===0&&dy<0) || (ty===maxy&&dy>0)) {
+    if (tx < minx || tx > maxx || ty < miny || ty > maxy) {
+      return false;
+    }
+
+    if ( (tx===minx&&dx<0) || (tx===maxx&&dx>0) || (ty===miny&&dy<0) || (ty===maxy&&dy>0)) {
       return false;
     }
 
@@ -11152,6 +11525,10 @@ function Level(lineNumber, width, height, layerCount, objects, section) {
 	this.layerCount = layerCount;
 	this.commandQueue = [];
 	this.commandQueueSourceRules = [];
+	this.mainBoardWidth = width;
+	this.mainBoardHeight = height;
+	this.extraBoardWidth = 1;
+	this.extraBoardHeight = 1;
 }
 
 Level.prototype.delta_index = function(direction)
@@ -11163,6 +11540,10 @@ Level.prototype.delta_index = function(direction)
 Level.prototype.clone = function() {
 	var clone = new Level(this.lineNumber, this.width, this.height, this.layerCount, null, this.section);
 	clone.objects = new Int32Array(this.objects);
+	clone.mainBoardWidth = this.mainBoardWidth;
+	clone.mainBoardHeight = this.mainBoardHeight;
+	clone.extraBoardWidth = this.extraBoardWidth;
+	clone.extraBoardHeight = this.extraBoardHeight;
 	return clone;
 }
 
@@ -11384,6 +11765,7 @@ function Rule(rule) {
     this.cellRowMasks_Movements = rule[10];
     this.isGlobal = rule[11];
     this.isOnce = rule[12];
+	this.boardScope = rule[13] || 0; // 0=all, 1=main board, 2=extra board
 	this.ruleMask = this.cellRowMasks.reduce( (acc, m) => { acc.ior(m); return acc }, new BitVec(STRIDE_OBJ) );
 
 	/*I tried out doing a ruleMask_movements as well along the lines of the above,
@@ -11621,7 +12003,7 @@ CellPattern.prototype.generateMatchFunction = function() {
 }
 
 var _o1,_o2,_o2_5,_o3,_o4,_o5,_o6,_o7,_o8,_o9,_o10,_o11,_o12;
-var _m1,_m2,_m3;
+var _m1,_m2,_m3,_m4;
 
 CellPattern.prototype.replace = function(rule, currentIndex) {
   var replace = this.replacement;
@@ -11638,7 +12020,8 @@ CellPattern.prototype.replace = function(rule, currentIndex) {
 
   var movementsSet = replace.movementsSet.cloneInto(_m1);
   var movementsClear = replace.movementsClear.cloneInto(_m2);
-  movementsClear.ior(replace.movementsLayerMask);
+  var scopedMovementsLayerMask = replace.movementsLayerMask.cloneInto(_m4);
+  movementsClear.ior(scopedMovementsLayerMask);
 
   if (!replace_RandomEntityMask.iszero()) {
     var choices=[];
@@ -11675,6 +12058,31 @@ CellPattern.prototype.replace = function(rule, currentIndex) {
   curMovementMask.iclear(movementsClear);
   curMovementMask.ior(movementsSet);
 
+  if ((rule.boardScope === 1 || rule.boardScope === 2) && state && state.extraBoardEnabled) {
+    const scopedBounds = getRuleScopedBounds(rule.boardScope, curLevel);
+    const x = ((currentIndex / curLevel.height) | 0);
+    const y = (currentIndex % curLevel.height);
+    for (let layer = 0; layer < curLevel.layerCount; layer++) {
+      const layerShift = MOV_BITS * layer;
+      const requestedMovement = movementsSet.getshiftor(MOV_MASK, layerShift);
+      if (requestedMovement === 0) {
+        continue;
+      }
+      const movement = curMovementMask.getshiftor(MOV_MASK, layerShift);
+      const delta = dirMasksDelta[movement];
+      if (!delta) {
+        continue;
+      }
+
+      const tx = x + delta[0];
+      const ty = y + delta[1];
+      if (tx < scopedBounds.xmin || tx >= scopedBounds.xmax || ty < scopedBounds.ymin || ty >= scopedBounds.ymax) {
+        curMovementMask.ishiftclear(movement, layerShift);
+        scopedMovementsLayerMask.ishiftclear(MOV_MASK, layerShift);
+      }
+    }
+  }
+
   var rigidchange=false;
   var curRigidGroupIndexMask =0;
   var curRigidMovementAppliedMask =0;
@@ -11685,14 +12093,14 @@ CellPattern.prototype.replace = function(rule, currentIndex) {
     for (var layer = 0; layer < curLevel.layerCount; layer++) {
       rigidMask.ishiftor(rigidGroupIndex, MOV_BITS * layer);
     }
-    rigidMask.iand(replace.movementsLayerMask);
+    rigidMask.iand(scopedMovementsLayerMask);
     curRigidGroupIndexMask = curLevel.rigidGroupIndexMask[currentIndex] || new BitVec(STRIDE_MOV);
     curRigidMovementAppliedMask = curLevel.rigidMovementAppliedMask[currentIndex] || new BitVec(STRIDE_MOV);
 
     if (!rigidMask.bitsSetInArray(curRigidGroupIndexMask.data) &&
-      !replace.movementsLayerMask.bitsSetInArray(curRigidMovementAppliedMask.data) ) {
+      !scopedMovementsLayerMask.bitsSetInArray(curRigidMovementAppliedMask.data) ) {
       curRigidGroupIndexMask.ior(rigidMask);
-      curRigidMovementAppliedMask.ior(replace.movementsLayerMask);
+      curRigidMovementAppliedMask.ior(scopedMovementsLayerMask);
       rigidchange=true;
 
     }
@@ -11748,28 +12156,60 @@ CellPattern.prototype.replace = function(rule, currentIndex) {
 
 
 
-function matchCellRow(direction, cellRowMatch, cellRow, cellRowMask,cellRowMask_Movements,d, isGlobal) {	
+function getRuleScopedBounds(boardScope, level = curLevel) {
+	if (!level) {
+		return { xmin: 0, xmax: 0, ymin: 0, ymax: 0 };
+	}
+
+	let xmin = 0;
+	let xmax = level.width;
+	let ymin = 0;
+	let ymax = level.height;
+
+	if (state && state.extraBoardEnabled) {
+		if (boardScope === 1) {
+			const mainBounds = getMainBoardBounds(level);
+			if (mainBounds) {
+				xmax = mainBounds.width;
+				ymax = mainBounds.height;
+			}
+		} else if (boardScope === 2) {
+			const extraBounds = getExtraBoardBounds(level);
+			if (extraBounds) {
+				xmax = extraBounds.width;
+				ymax = extraBounds.height;
+			}
+		}
+	}
+
+	return { xmin, xmax, ymin, ymax };
+}
+
+function matchCellRow(direction, cellRowMatch, cellRow, cellRowMask,cellRowMask_Movements,d, isGlobal, boardScope = 0) {
 	var result=[];
-	
+
 	if ((!cellRowMask.bitsSetInArray(curLevel.mapCellContents.data))||
 	(!cellRowMask_Movements.bitsSetInArray(curLevel.mapCellContents_Movements.data))) {
 		return result;
 	}
 
-  if(isGlobal || state.metadata.local_radius === undefined){
-    xmin=0;
-    xmax=curLevel.width;
-    ymin=0;
-    ymax=curLevel.height;
-  }
-  else{
-    var localradius = parseInt(state.metadata.local_radius);
-    xmin=Math.max(0, (playerPositions[0]/curLevel.height|0) - localradius);
-    xmax=Math.min(curLevel.width, (playerPositions[0]/curLevel.height|0) + localradius +1);
-    ymin=Math.max(0, playerPositions[0]%curLevel.height - localradius);
-    ymax=Math.min(curLevel.height, playerPositions[0]%curLevel.height + localradius+1);
+	const scoped = getRuleScopedBounds(boardScope, curLevel);
+	let xmin = scoped.xmin;
+	let xmax = scoped.xmax;
+	let ymin = scoped.ymin;
+	let ymax = scoped.ymax;
 
-  }
+	if (!(isGlobal || state.metadata.local_radius === undefined)) {
+		var localradius = parseInt(state.metadata.local_radius);
+		const lxmin = Math.max(0, (playerPositions[0]/curLevel.height|0) - localradius);
+		const lxmax = Math.min(curLevel.width, (playerPositions[0]/curLevel.height|0) + localradius +1);
+		const lymin = Math.max(0, playerPositions[0]%curLevel.height - localradius);
+		const lymax = Math.min(curLevel.height, playerPositions[0]%curLevel.height + localradius+1);
+		xmin = Math.max(xmin, lxmin);
+		xmax = Math.min(xmax, lxmax);
+		ymin = Math.max(ymin, lymin);
+		ymax = Math.min(ymax, lymax);
+	}
 
     var len=cellRow.length;
 
@@ -11779,7 +12219,7 @@ function matchCellRow(direction, cellRowMatch, cellRow, cellRowMask,cellRowMask_
         ymin+=(len-1);
         break;
       }
-      case 2: //down 
+      case 2: //down
       {
       ymax-=(len-1);
       break;
@@ -11791,7 +12231,7 @@ function matchCellRow(direction, cellRowMatch, cellRow, cellRowMask,cellRowMask_
       }
       case 8: //right
     {
-      xmax-=(len-1);  
+      xmax-=(len-1);
       break;
     }
       default:
@@ -11803,7 +12243,7 @@ function matchCellRow(direction, cellRowMatch, cellRow, cellRowMask,cellRowMask_
     var horizontal=direction>2;
     if (horizontal) {
 		for (var y=ymin;y<ymax;y++) {
-			if (!cellRowMask.bitsSetInArray(curLevel.rowCellContents[y].data) 
+			if (!cellRowMask.bitsSetInArray(curLevel.rowCellContents[y].data)
 			|| !cellRowMask_Movements.bitsSetInArray(curLevel.rowCellContents_Movements[y].data)) {
 				continue;
 			}
@@ -11829,24 +12269,29 @@ function matchCellRow(direction, cellRowMatch, cellRow, cellRowMask,cellRowMask_
 					result.push(i);
 				}
 			}
-		}		
+		}
 	}
 
   return result;
 }
 
 
-function matchCellRowWildCard(direction, cellRowMatch, cellRow,cellRowMask,cellRowMask_Movements,d,wildcardCount) {
+function matchCellRowWildCard(direction, cellRowMatch, cellRow,cellRowMask,cellRowMask_Movements,d,wildcardCount, boardScope = 0) {
 	var result=[];
 	if ((!cellRowMask.bitsSetInArray(curLevel.mapCellContents.data))
 	|| (!cellRowMask_Movements.bitsSetInArray(curLevel.mapCellContents_Movements.data))) {
 		return result;
 	}
-	
-	var xmin=0;
-	var xmax=curLevel.width;
-	var ymin=0;
-	var ymax=curLevel.height;
+
+	const scoped = getRuleScopedBounds(boardScope, curLevel);
+	const xminBound = scoped.xmin;
+	const xmaxBound = scoped.xmax;
+	const yminBound = scoped.ymin;
+	const ymaxBound = scoped.ymax;
+	var xmin=xminBound;
+	var xmax=xmaxBound;
+	var ymin=yminBound;
+	var ymax=ymaxBound;
 
 	var len=cellRow.length-wildcardCount;//remove one to deal with wildcard
     switch(direction) {
@@ -11855,7 +12300,7 @@ function matchCellRowWildCard(direction, cellRowMatch, cellRow,cellRowMask,cellR
         ymin+=(len-1);
         break;
       }
-      case 2: //down 
+      case 2: //down
       {
       ymax-=(len-1);
       break;
@@ -11867,7 +12312,7 @@ function matchCellRowWildCard(direction, cellRowMatch, cellRow,cellRowMask,cellR
       }
       case 8: //right
     {
-      xmax-=(len-1);  
+      xmax-=(len-1);
       break;
     }
       default:
@@ -11891,11 +12336,11 @@ function matchCellRowWildCard(direction, cellRowMatch, cellRow,cellRowMask,cellR
 				var kmax;
 
 				if (direction === 4) { //left
-					kmax=x-len+2;
+					kmax=x-xminBound-len+2;
 				} else if (direction === 8) { //right
-					kmax=curLevel.width-(x+len)+1;	
+					kmax=xmaxBound-(x+len)+1;
 				} else {
-					window.console.log("EEEP2 "+direction);					
+					window.console.log("EEEP2 "+direction);
 				}
 
 				if (wildcardCount===1) {
@@ -11918,9 +12363,9 @@ function matchCellRowWildCard(direction, cellRowMatch, cellRow,cellRowMask,cellR
 
 
         if (direction === 2) { // down
-          kmax=curLevel.height-(y+len)+1;
+          kmax=ymaxBound-(y+len)+1;
         } else if (direction === 1) { // up
-          kmax=y-len+2;         
+          kmax=y-yminBound-len+2;
         } else {
           window.console.log("EEEP2 "+direction);
         }
@@ -11930,7 +12375,7 @@ function matchCellRowWildCard(direction, cellRowMatch, cellRow,cellRowMask,cellR
 					result.push.apply(result, cellRowMatch(cellRow,i,kmax,0, kmax,0, kmax,0, d, curLevel.objects, curLevel.movements));
 				}
 			}
-    }   
+    }
   }
 
   return result;
@@ -11971,11 +12416,11 @@ Rule.prototype.findMatches = function() {
         var cellRow = this.patterns[cellRowIndex];
         var matchFunction = this.cellRowMatches[cellRowIndex];
         if (this.ellipsisCount[cellRowIndex]===1) {//if ellipsis     
-        	var match = matchCellRowWildCard(this.direction,matchFunction,cellRow,cellRowMasks[cellRowIndex],cellRowMasks_Movements[cellRowIndex],d,this.ellipsisCount[cellRowIndex]);  
+        	var match = matchCellRowWildCard(this.direction,matchFunction,cellRow,cellRowMasks[cellRowIndex],cellRowMasks_Movements[cellRowIndex],d,this.ellipsisCount[cellRowIndex], this.boardScope);
         } else  if (this.ellipsisCount[cellRowIndex]===0) {
-        	var match = matchCellRow(this.direction,matchFunction,cellRow,cellRowMasks[cellRowIndex],cellRowMasks_Movements[cellRowIndex],d, this.isGlobal);               	
+        	var match = matchCellRow(this.direction,matchFunction,cellRow,cellRowMasks[cellRowIndex],cellRowMasks_Movements[cellRowIndex],d, this.isGlobal, this.boardScope);
         } else { // ellipsiscount===2
-        	var match = matchCellRowWildCard(this.direction,matchFunction,cellRow,cellRowMasks[cellRowIndex],cellRowMasks_Movements[cellRowIndex],d,this.ellipsisCount[cellRowIndex]);  
+        	var match = matchCellRowWildCard(this.direction,matchFunction,cellRow,cellRowMasks[cellRowIndex],cellRowMasks_Movements[cellRowIndex],d,this.ellipsisCount[cellRowIndex], this.boardScope);
         }
 		if (debugSwitch.includes('masks')) {
 			const cro = cellRowMasks[cellRowIndex].format();
@@ -12220,15 +12665,214 @@ function getQueuedBorderCommands(commandQueue) {
 	return ret;
 }
 
+function getMainBoardBounds(level = curLevel) {
+	if (!level) {
+		return null;
+	}
+
+	const widthRaw = isFinite(level.mainBoardWidth) ? Math.floor(level.mainBoardWidth) : level.width;
+	const heightRaw = isFinite(level.mainBoardHeight) ? Math.floor(level.mainBoardHeight) : level.height;
+	const width = Math.max(1, Math.min(level.width, widthRaw));
+	const height = Math.max(1, Math.min(level.height, heightRaw));
+	return { width, height };
+}
+
+function getExtraBoardBounds(level = curLevel) {
+	if (!state || !state.extraBoardEnabled || !level) {
+		return null;
+	}
+
+	const widthRaw = isFinite(level.extraBoardWidth) ? Math.floor(level.extraBoardWidth) : 1;
+	const heightRaw = isFinite(level.extraBoardHeight) ? Math.floor(level.extraBoardHeight) : 1;
+	const width = Math.max(1, Math.min(level.width, widthRaw));
+	const height = Math.max(1, Math.min(level.height, heightRaw));
+	return { width, height };
+}
+
+function getBaseObjectMask() {
+	if (!state || !state.extraBoardEnabled || !state.extraIdByBaseId) {
+		return null;
+	}
+
+	const mask = new BitVec(STRIDE_OBJ);
+	for (const baseIdText of Object.keys(state.extraIdByBaseId)) {
+		const baseId = parseInt(baseIdText, 10);
+		if (isFinite(baseId) && !isNaN(baseId)) {
+			mask.ibitset(baseId);
+		}
+	}
+	return mask.iszero() ? null : mask;
+}
+
+function getExtraObjectMask() {
+	if (!state || !state.extraBoardEnabled || !state.extraIdByBaseId) {
+		return null;
+	}
+
+	const mask = new BitVec(STRIDE_OBJ);
+	for (const baseIdText of Object.keys(state.extraIdByBaseId)) {
+		const extraId = state.extraIdByBaseId[baseIdText];
+		if (extraId !== undefined) {
+			mask.ibitset(extraId);
+		}
+	}
+	return mask.iszero() ? null : mask;
+}
+
+function pruneObjectsOutsideBoardBounds(level = curLevel) {
+	if (!state || !state.extraBoardEnabled || !level) {
+		return false;
+	}
+
+	const mainBounds = getMainBoardBounds(level);
+	const extraBounds = getExtraBoardBounds(level);
+	if (!mainBounds || !extraBounds) {
+		return false;
+	}
+
+	level.mainBoardWidth = mainBounds.width;
+	level.mainBoardHeight = mainBounds.height;
+	level.extraBoardWidth = extraBounds.width;
+	level.extraBoardHeight = extraBounds.height;
+
+	const baseMask = getBaseObjectMask();
+	const extraMask = getExtraObjectMask();
+	if (!baseMask && !extraMask) {
+		return false;
+	}
+
+	const mainBgLayerMask = (state.backgroundlayer !== undefined)
+		? state.layerMasks[state.backgroundlayer]
+		: null;
+	const mainBgMask = (state.backgroundid !== undefined)
+		? (() => {
+			const mask = new BitVec(STRIDE_OBJ);
+			mask.ibitset(state.backgroundid);
+			return mask;
+		})()
+		: null;
+	const bgLayerMask = (state.extraBackgroundlayer !== undefined)
+		? state.layerMasks[state.extraBackgroundlayer]
+		: null;
+	const bgMask = (state.extraBackgroundid !== undefined)
+		? (() => {
+			const mask = new BitVec(STRIDE_OBJ);
+			mask.ibitset(state.extraBackgroundid);
+			return mask;
+		})()
+		: null;
+
+	let changed = false;
+	for (let x = 0; x < level.width; x++) {
+		for (let y = 0; y < level.height; y++) {
+			const idx = y + x * level.height;
+			const outsideMain = x >= mainBounds.width || y >= mainBounds.height;
+			const outsideExtra = x >= extraBounds.width || y >= extraBounds.height;
+			const cell = level.getCell(idx);
+			let cellChanged = false;
+
+			if (outsideMain && baseMask && baseMask.anyBitsInCommon(cell)) {
+				cell.iclear(baseMask);
+				cellChanged = true;
+			} else if (!outsideMain && mainBgMask && mainBgLayerMask && !mainBgLayerMask.anyBitsInCommon(cell)) {
+				cell.ior(mainBgMask);
+				cellChanged = true;
+			}
+			if (outsideExtra && extraMask && extraMask.anyBitsInCommon(cell)) {
+				cell.iclear(extraMask);
+				cellChanged = true;
+			} else if (!outsideExtra && bgMask && bgLayerMask && !bgLayerMask.anyBitsInCommon(cell)) {
+				cell.ior(bgMask);
+				cellChanged = true;
+			}
+
+			if (cellChanged) {
+				level.setCell(idx, cell);
+				changed = true;
+			}
+		}
+	}
+
+	return changed;
+}
+
+function clampExtraBoardBounds(level = curLevel) {
+	pruneObjectsOutsideBoardBounds(level);
+}
+
+function snapshotExtraBoard(level = curLevel) {
+	const bounds = getExtraBoardBounds(level);
+	const extraMask = getExtraObjectMask();
+	if (!bounds || !extraMask) {
+		return null;
+	}
+
+	const data = new Int32Array(bounds.width * bounds.height * STRIDE_OBJ);
+	for (let x = 0; x < bounds.width; x++) {
+		for (let y = 0; y < bounds.height; y++) {
+			const srcIndex = y + x * level.height;
+			const dstIndex = (y + x * bounds.height) * STRIDE_OBJ;
+			const cell = level.getCell(srcIndex);
+			cell.iand(extraMask);
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				data[dstIndex + w] = cell.data[w];
+			}
+		}
+	}
+
+	return {
+		width: bounds.width,
+		height: bounds.height,
+		data: data
+	};
+}
+
+function restoreExtraBoard(level, snapshot) {
+	if (!snapshot) {
+		return;
+	}
+
+	const extraMask = getExtraObjectMask();
+	if (!extraMask) {
+		return;
+	}
+
+	level.extraBoardWidth = snapshot.width;
+	level.extraBoardHeight = snapshot.height;
+
+	for (let i = 0; i < level.n_tiles; i++) {
+		const cell = level.getCell(i);
+		cell.iclear(extraMask);
+		level.setCell(i, cell);
+	}
+
+	const copyWidth = Math.min(snapshot.width, level.width);
+	const copyHeight = Math.min(snapshot.height, level.height);
+	for (let x = 0; x < copyWidth; x++) {
+		for (let y = 0; y < copyHeight; y++) {
+			const dstIndex = (y + x * level.height) * STRIDE_OBJ;
+			const srcIndex = (y + x * snapshot.height) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				level.objects[dstIndex + w] |= snapshot.data[srcIndex + w];
+			}
+		}
+	}
+
+	clampExtraBoardBounds(level);
+}
+
 function normalizeBorderAmount(direction, amount, width, height) {
 	let clamped = amount;
+	const minWidth = 1;
+	const minHeight = 1;
+
 	if (direction === 'left' || direction === 'right') {
 		if (amount < 0) {
-			clamped = Math.max(amount, 1 - width);
+			clamped = Math.max(amount, minWidth - width);
 		}
 	} else if (direction === 'up' || direction === 'down') {
 		if (amount < 0) {
-			clamped = Math.max(amount, 1 - height);
+			clamped = Math.max(amount, minHeight - height);
 		}
 	} else {
 		clamped = 0;
@@ -12237,16 +12881,26 @@ function normalizeBorderAmount(direction, amount, width, height) {
 }
 
 function applyBorderResize(direction, amount) {
+	const mainBounds = getMainBoardBounds(curLevel);
+	if (!mainBounds) {
+		return false;
+	}
+	const oldMainWidth = mainBounds.width;
+	const oldMainHeight = mainBounds.height;
 	const oldWidth = curLevel.width;
 	const oldHeight = curLevel.height;
-	const effectiveAmount = normalizeBorderAmount(direction, amount, oldWidth, oldHeight);
+	const extraSnapshot = snapshotExtraBoard(curLevel);
+	const effectiveAmount = normalizeBorderAmount(direction, amount, oldMainWidth, oldMainHeight);
 	if (effectiveAmount === 0) {
 		return false;
 	}
 
-	const newWidth = oldWidth + ((direction === 'left' || direction === 'right') ? effectiveAmount : 0);
-	const newHeight = oldHeight + ((direction === 'up' || direction === 'down') ? effectiveAmount : 0);
-	if (newWidth <= 0 || newHeight <= 0) {
+	const newMainWidth = oldMainWidth + ((direction === 'left' || direction === 'right') ? effectiveAmount : 0);
+	const newMainHeight = oldMainHeight + ((direction === 'up' || direction === 'down') ? effectiveAmount : 0);
+	const extraBounds = getExtraBoardBounds(curLevel) || { width: 1, height: 1 };
+	const newWidth = Math.max(newMainWidth, extraBounds.width);
+	const newHeight = Math.max(newMainHeight, extraBounds.height);
+	if (newMainWidth <= 0 || newMainHeight <= 0 || newWidth <= 0 || newHeight <= 0) {
 		return false;
 	}
 
@@ -12287,6 +12941,14 @@ function applyBorderResize(direction, amount) {
 	curLevel.height = newHeight;
 	curLevel.n_tiles = newWidth * newHeight;
 	curLevel.objects = newObjects;
+	curLevel.mainBoardWidth = newMainWidth;
+	curLevel.mainBoardHeight = newMainHeight;
+	if (extraSnapshot) {
+		restoreExtraBoard(curLevel, extraSnapshot);
+	} else {
+		clampExtraBoardBounds(curLevel);
+	}
+	pruneObjectsOutsideBoardBounds(curLevel);
 	RebuildLevelArrays();
 	return true;
 }
@@ -12302,8 +12964,9 @@ function applyQueuedBorderCommands(commandQueue, dryRun = false) {
 
 	if (dryRun) {
 		let changed = false;
-		let width = curLevel.width;
-		let height = curLevel.height;
+		const mainBounds = getMainBoardBounds(curLevel) || { width: curLevel.width, height: curLevel.height };
+		let width = mainBounds.width;
+		let height = mainBounds.height;
 		for (const border of borders) {
 			const effectiveAmount = normalizeBorderAmount(border.direction, border.amount, width, height);
 			if (effectiveAmount === 0) {
@@ -13124,6 +13787,13 @@ function procInp(dir,dontDoWin,dontModify,bak,coord) {
 			}
 			return true;
 		}
+		const outOfBoundsPruned = pruneObjectsOutsideBoardBounds(curLevel);
+		if (dontModify && outOfBoundsPruned) {
+			if (verbose_logging) {
+				consoleCacheDump();
+			}
+			return true;
+		}
 
 		var save_backup = true;
 		if(!winning && curLevel.commandQueue.indexOf('nosave')>=0) {
@@ -13136,6 +13806,7 @@ function procInp(dir,dontDoWin,dontModify,bak,coord) {
 	    
         var modified=false;
 		var changed = borderChanged ||
+			outOfBoundsPruned ||
 			(curLevel.width!==bak.width) ||
 			(curLevel.height!==bak.height) ||
 			(curLevel.objects.length!==bak.dat.length);
@@ -13459,7 +14130,8 @@ function nextLevel() {
 			loadLevelFromStateOrTarget();
 		} else if(isNewGameOptionSelected()) {
 			// new game
-			curLevelNo=0;
+			const firstAutoLevel = getNextAutoLevelIndex(-1);
+			curLevelNo = firstAutoLevel >= 0 ? firstAutoLevel : 0;
 			curlevelTarget=null;
 
 			if (state.metadata.level_select === undefined) {
@@ -13480,15 +14152,28 @@ function nextLevel() {
 			hasUsedCheckpoint=false;
 		}
 
-		if (curLevelNo<(state.levels.length-1)) {
+		const nextAutoLevelNo = getNextAutoLevelIndex(curLevelNo);
+		if (nextAutoLevelNo >= 0) {
 			var skip = false;
 			var curSection = state.levels[curLevelNo].section;
-			var nextSection = state.levels[curLevelNo+1].section;
+			var nextSection = state.levels[nextAutoLevelNo].section;
 			if(nextSection != curSection) {
 				setSectionSolved(state.levels[curLevelNo].section);
 
-				if(solvedSections.length == state.sections.length && state.winSection != undefined) {
-					curLevelNo = state.winSection.firstLevel - 1; // it's gonna be increased to match few lines below
+				if(hasSolvedAllTargetSections() && state.winSection != undefined) {
+					const winStart = getFirstSectionAutoLevelIndex("__WIN__");
+					if (winStart >= 0) {
+						curLevelNo = winStart;
+						curlevelTarget=null;
+						textMode=false;
+						titleScreen=false;
+						quittingMessageScreen=false;
+						loadLevelFromStateOrTarget();
+						skip = true;
+					} else if (nextSection == "__WIN__") {
+						gotoLevelSelectScreen();
+						skip = true;
+					}
 				} else if (nextSection == "__WIN__") {
 					gotoLevelSelectScreen();
 					skip = true;
@@ -13496,7 +14181,7 @@ function nextLevel() {
 			}
 
 			if(!skip) {
-				curLevelNo++;
+				curLevelNo = nextAutoLevelNo;
 				curlevelTarget=null;
 				textMode=false;
 				titleScreen=false;
@@ -13505,7 +14190,7 @@ function nextLevel() {
 				loadLevelFromStateOrTarget();
 			}
 		} else {
-			if (solvedSections.length == state.sections.length) {
+			if (hasSolvedAllTargetSections()) {
 				if (!state.metadata.level_select) {
 					// solved all
 					try {
@@ -13565,6 +14250,8 @@ function goToTitleScreen(){
 	}
 	
 	levelSelectScrollPos = 0;
+	levelSelectCurrentParent = -1;
+	levelSelectEntries = [];
 	generateTitleScreen();
 }
 
@@ -13599,7 +14286,14 @@ function setSectionSolved(section) {
 		return;
 	}
 
-	if(section.name == "__WIN__") {
+	if(section == "__WIN__") {
+		return;
+	}
+
+	const sectionMeta = Array.isArray(state.sections)
+		? state.sections.find(s => s && s.name === section)
+		: null;
+	if (sectionMeta && !isSectionProgressTarget(sectionMeta)) {
 		return;
 	}
 
@@ -13775,9 +14469,9 @@ const soundverbs_directional = ['move', 'cantmove'];
 const soundverbs_other = [ 'create', 'destroy' ];
 let soundverbs_movement = [ 'action' ];  // clicks to be added
 let directions_table = ['action', 'up', 'down', 'left', 'right', '^', 'v', '<', '>', 
-    'moving', 'stationary', 'parallel', 'perpendicular', 'horizontal', 'orthogonal', 'vertical', 'no', 'randomdir', 'random'];
+    'moving', 'stationary', 'parallel', 'perpendicular', 'horizontal', 'orthogonal', 'vertical', 'no', 'randomdir', 'random', 'extra'];
 let directions_only = ['>', '\<', '\^', 'v', 'up', 'down', 'left', 'right', 'action', 'moving', 
-    'stationary', 'no', 'randomdir', 'random', 'horizontal', 'vertical', 'orthogonal', 'perpendicular', 'parallel'];
+    'stationary', 'no', 'randomdir', 'random', 'horizontal', 'vertical', 'orthogonal', 'perpendicular', 'parallel', 'extra'];
 const mouse_clicks_table = ['lclick', 'rclick']; // gets appended
 
 // Note: '^', '>', 'v', '<' seems more logical, but is not compatible
@@ -13938,16 +14632,17 @@ var codeMirrorFn = function() {
     const reg_sounddirectionindicators = /^(up|down|left|right|horizontal|vertical|orthogonal)\b/i;
 
     const keyword_array = [ 'checkpoint', 'objects', 'collisionlayers', 'legend', 'sounds', 'rules', 'winconditions', 'levels',
-        'layer',
+        'layer', 'extra',
         '|', '[', ']', 'up', 'down', 'left', 'right', 'late', 'rigid', '^', 'v', '>', '<', 'no', 'randomdir', 'random', 'horizontal', 'vertical',
         'any', 'all', 'no', 'some', 'moving', 'stationary', 'parallel', 'perpendicular', 'action', 'message', 'move', 
         'create', 'destroy', 'cantmove', 'sfx0', 'sfx1', 'sfx2', 'sfx3', 'Sfx4', 'sfx5', 'sfx6', 'sfx7', 'sfx8', 'sfx9', 'sfx10', 
-        'cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'restart', 'titlescreen', 'startgame', 'cancel', 'endgame', 
+        'cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'restart', 'border', 'titlescreen', 'startgame', 'cancel', 'endgame', 
         'startlevel', 'endlevel', 'showmessage', 'closemessage' ];
     const prelude_keywords = ['allow_undo_level', 'auto_level_titles', 'case_sensitive', 'continue_is_level_select', 'debug', 'enable_pause', 
         'level_select', 'level_select_lock', 
         'mouse_clicks', 'noaction', 'nokeyboard', 'norepeat_action', 'norestart', 'noundo', 'require_player_movement', 
         'run_rules_on_level_start', 'runtime_metadata_twiddling', 'runtime_metadata_twiddling_debug', 'runtime_border_twiddling', 'scanline', 'render_height',
+        'extra_board', 'extra_debug', 'hide_labeled_levels',
         'skip_title_screen', 'smoothscreen_debug', 'status_line', 'throttle_movement', 'verbose_logging'];
     const prelude_param_text = ['title', 'author', 'homepage', 'custom_font', 'text_controls', 'text_message_continue', 'debug_switch', 'export_options' ];
     const prelude_param_number = ['again_interval', 'animate_interval', 'font_size', 'key_repeat_interval', 
@@ -15495,7 +16190,7 @@ var codeMirrorFn = function() {
         function getTokens() {
             let token
             // start of parse
-            if (token = lexer.match(/^(goto|level|link|message|section|title|input|layer)/i, true)) { // allow omision of whitespace (with no warning!)
+            if (token = lexer.match(/^(goto|level|link|message|section|title|input|layer|extra)/i, true)) { // allow omision of whitespace (with no warning!)
                 symbols.start = token;
                 lexer.pushToken(token, `${token.toUpperCase()}_VERB`);
 
@@ -15544,7 +16239,7 @@ var codeMirrorFn = function() {
                 state.levels.pop();
                 toplevel = null;
             }
-            const cmds = [ 'goto', 'level', 'link', 'message', 'section', 'title', 'input', 'layer' ];
+            const cmds = [ 'goto', 'level', 'link', 'message', 'section', 'title', 'input', 'layer', 'extra' ];
             if (cmds.includes(symbols.start))
                 state.levels.push([ symbols.start, symbols.text, state.lineNumber, symbols.link ]);
             else {
@@ -16407,6 +17102,15 @@ function colorToHex(palette, str) {
 }
 
 var debugMode;
+const EXTRA_OBJECT_PREFIX = "__extra__";
+
+function isExtraObjectName(name) {
+    return typeof name === "string" && name.startsWith(EXTRA_OBJECT_PREFIX);
+}
+
+function toExtraObjectName(name) {
+    return `${EXTRA_OBJECT_PREFIX}${name}`;
+}
 
 function generateExtraMembers(state) {
 
@@ -16414,11 +17118,60 @@ function generateExtraMembers(state) {
         logError("No collision layers defined.  All objects need to be in collision layers.");
     }
 
+    const extraBoardEnabled = !!state.metadata.extra_board;
+    if (state.metadata.extra_debug && !extraBoardEnabled) {
+        logWarning("EXTRA_DEBUG is ignored unless EXTRA_BOARD is enabled.", state.metadata_lines.extra_debug);
+    }
+
+    if (extraBoardEnabled) {
+        const baseObjectNames = Object.keys(state.objects).filter(name => !isExtraObjectName(name));
+        const baseLayerCount = state.collisionLayers.length;
+        state.extraBoardEnabled = true;
+        state.extraObjectPrefix = EXTRA_OBJECT_PREFIX;
+        state.extraBaseObjectNames = baseObjectNames.slice();
+        state.extraBaseLayerCount = baseLayerCount;
+        state.extraNameMap = state.extraNameMap || {};
+
+        for (const baseName of baseObjectNames) {
+            const extraName = toExtraObjectName(baseName);
+            state.extraNameMap[baseName] = extraName;
+            if (!(extraName in state.objects)) {
+                state.objects[extraName] = deepClone(state.objects[baseName]);
+            }
+        }
+
+        function cloneLegendEntries(list) {
+            const clones = [];
+            for (const entry of list) {
+                if (entry.length < 2 || isExtraObjectName(entry[0])) {
+                    continue;
+                }
+                const cloned = entry.map(name => toExtraObjectName(name));
+                cloned.lineNumber = entry.lineNumber;
+                clones.push(cloned);
+                state.extraNameMap[entry[0]] = cloned[0];
+            }
+            list.push(...clones);
+        }
+
+        cloneLegendEntries(state.legend_synonyms);
+        cloneLegendEntries(state.legend_properties);
+        cloneLegendEntries(state.legend_aggregates);
+
+        const extraCollisionLayers = state.collisionLayers.map(layer => layer.map(name => toExtraObjectName(name)));
+        state.collisionLayers.push(...extraCollisionLayers);
+    } else {
+        state.extraBoardEnabled = false;
+    }
+
     //annotate objects with layers
     //assign ids at the same time
     state.idDict = [];          // doc: dictionary of object names indexed by ID
     var idcount = 0;
     for (var layerIndex = 0; layerIndex < state.collisionLayers.length; layerIndex++) {
+        if (extraBoardEnabled && layerIndex === state.extraBaseLayerCount) {
+            state.extraObjectStartId = idcount;
+        }
         for (var j = 0; j < state.collisionLayers[layerIndex].length; j++) {
             var n = state.collisionLayers[layerIndex][j];
             if (n in state.objects) {
@@ -16432,7 +17185,7 @@ function generateExtraMembers(state) {
     }
 
     // PS> fill in start and length of each group of objects
-    let prevObjectNo = idcount;
+    let prevObjectNo = (extraBoardEnabled && state.extraObjectStartId !== undefined) ? state.extraObjectStartId : idcount;
     for (let i = state.collisionLayerGroups.length - 1; i >= 0; --i) {
         const group = state.collisionLayerGroups[i];
         group.firstObjectNo = state.objects[state.collisionLayers[group.layer][0]].id;
@@ -16442,6 +17195,24 @@ function generateExtraMembers(state) {
 
     //set object count
     state.objectCount = idcount;
+
+    if (extraBoardEnabled) {
+        state.extraIdByBaseId = {};
+        state.baseIdByExtraId = {};
+        let minExtraId = Number.MAX_SAFE_INTEGER;
+        for (const baseName of state.extraBaseObjectNames) {
+            const extraName = toExtraObjectName(baseName);
+            const baseObj = state.objects[baseName];
+            const extraObj = state.objects[extraName];
+            if (!baseObj || !extraObj) {
+                continue;
+            }
+            state.extraIdByBaseId[baseObj.id] = extraObj.id;
+            state.baseIdByExtraId[extraObj.id] = baseObj.id;
+            minExtraId = Math.min(minExtraId, extraObj.id);
+        }
+        state.extraObjectStartId = (minExtraId === Number.MAX_SAFE_INTEGER) ? state.objectCount : minExtraId;
+    }
 
     //calculate blank mask template
     var layerCount = state.collisionLayers.length;
@@ -16775,6 +17546,15 @@ function generateExtraMembers(state) {
     }
     state.backgroundid = backgroundid;
     state.backgroundlayer = backgroundlayer;
+    if (extraBoardEnabled) {
+        state.extraBackgroundid = state.extraIdByBaseId[backgroundid];
+        if (state.extraBackgroundid === undefined) {
+            logError("EXTRA_BOARD internal error: failed to derive extra background object.");
+        } else {
+            const extraBgName = state.idDict[state.extraBackgroundid];
+            state.extraBackgroundlayer = state.objects[extraBgName].layer;
+        }
+    }
 }
 
 function generateExtraMembersPart2(state) {
@@ -17012,9 +17792,11 @@ Level.prototype.calcBackgroundMask = function(state) {
     return cell;
 }
 
-function levelFromString(state,level) {
-	var backgroundlayer=state.backgroundlayer;
-	//var backgroundid=state.backgroundid;
+function levelFromString(state,level, isExtraBoard = false) {
+	var backgroundlayer = state.backgroundlayer;
+	if (isExtraBoard && state.extraBoardEnabled && state.extraBackgroundlayer !== undefined) {
+		backgroundlayer = state.extraBackgroundlayer;
+	}
 	var backgroundLayerMask = state.layerMasks[backgroundlayer];
 
     // pad all lines to same length
@@ -17023,6 +17805,8 @@ function levelFromString(state,level) {
 
 	var o = new Level(level[0], level[2].length, level.length-2, state.collisionLayers.length, null, level[1]);
 	o.objects = new Int32Array(o.width * o.height * STRIDE_OBJ);
+	o.mainBoardWidth = o.width;
+	o.mainBoardHeight = o.height;
 
 	for (var i = 0; i < o.width; i++) {
 		for (var j = 0; j < o.height; j++) {
@@ -17042,7 +17826,21 @@ function levelFromString(state,level) {
 			}
 
 			var maskint = new BitVec(STRIDE_OBJ);
-			mask = mask.concat([]);					
+			mask = mask.concat([]);
+			if (isExtraBoard && state.extraBoardEnabled) {
+				const remapped = new Array(mask.length).fill(-1);
+				for (var z = 0; z < mask.length; z++) {
+					if (mask[z] >= 0) {
+						const extraId = state.extraIdByBaseId[mask[z]];
+						if (extraId !== undefined) {
+							const extraObjName = state.idDict[extraId];
+							const extraLayer = state.objects[extraObjName].layer;
+							remapped[extraLayer] = extraId;
+						}
+					}
+				}
+				mask = remapped;
+			}
 			for (var z = 0; z < o.layerCount; z++) {
 				if (mask[z]>=0) {
 					maskint.ibitset(mask[z]);
@@ -17054,7 +17852,13 @@ function levelFromString(state,level) {
 		}
 	}
 
-	var levelBackgroundMask = o.calcBackgroundMask(state);
+	var levelBackgroundMask;
+	if (isExtraBoard && state.extraBoardEnabled && state.extraBackgroundid !== undefined) {
+		levelBackgroundMask = new BitVec(STRIDE_OBJ);
+		levelBackgroundMask.ibitset(state.extraBackgroundid);
+	} else {
+		levelBackgroundMask = o.calcBackgroundMask(state);
+	}
 	for (var i=0;i<o.n_tiles;i++)
 	{
 		var cell = o.getCell(i);
@@ -17108,11 +17912,15 @@ function levelAllObjects(state) {
 function levelsToArray(state) {
 	const levels = [];
     const links = [];
+    const sectionDeclarations = [];
     //const links = {};
     //const targets = new Set();
     let section, title, description, gotoFlag, input;
+    let levelTitleExplicit = false;
     let expectLayerGrid = false;
     let expectLayerLine = null;
+    let expectExtraGrid = false;
+    let expectExtraLine = null;
     const layerObjectIds = state.collisionLayers.map(layer => layer.map(name => state.objects[name].id));
 
     const isGridLevel = level => level instanceof Level;
@@ -17159,6 +17967,121 @@ function levelsToArray(state) {
         }
         return true;
     }
+
+    function initExtraBoard(level) {
+        if (!state.extraBoardEnabled || state.extraBackgroundid === undefined || state.extraBackgroundlayer === undefined) {
+            return;
+        }
+        level.mainBoardWidth = level.mainBoardWidth || level.width;
+        level.mainBoardHeight = level.mainBoardHeight || level.height;
+        level.extraBoardWidth = 1;
+        level.extraBoardHeight = 1;
+
+        const extraAllMask = new BitVec(STRIDE_OBJ);
+        for (const baseIdText of Object.keys(state.extraIdByBaseId || {})) {
+            const extraId = state.extraIdByBaseId[baseIdText];
+            if (extraId !== undefined) {
+                extraAllMask.ibitset(extraId);
+            }
+        }
+        const extraBgMask = new BitVec(STRIDE_OBJ);
+        extraBgMask.ibitset(state.extraBackgroundid);
+
+        for (let x = 0; x < level.width; x++) {
+            for (let y = 0; y < level.height; y++) {
+                const idx = y + x * level.height;
+                const cell = level.getCell(idx);
+                cell.iclear(extraAllMask);
+                if (x === 0 && y === 0) {
+                    cell.ior(extraBgMask);
+                }
+                level.setCell(idx, cell);
+            }
+        }
+    }
+
+    function resizeLevelTo(level, newWidth, newHeight) {
+        if (newWidth === level.width && newHeight === level.height) {
+            return;
+        }
+        const oldWidth = level.width;
+        const oldHeight = level.height;
+        const oldObjects = level.objects;
+        const newObjects = new Int32Array(newWidth * newHeight * STRIDE_OBJ);
+
+        for (let x = 0; x < oldWidth; x++) {
+            for (let y = 0; y < oldHeight; y++) {
+                if (x >= newWidth || y >= newHeight) {
+                    continue;
+                }
+                const oldIndex = (y + x * oldHeight) * STRIDE_OBJ;
+                const newIndex = (y + x * newHeight) * STRIDE_OBJ;
+                for (let w = 0; w < STRIDE_OBJ; w++) {
+                    newObjects[newIndex + w] = oldObjects[oldIndex + w];
+                }
+            }
+        }
+
+        level.width = newWidth;
+        level.height = newHeight;
+        level.n_tiles = newWidth * newHeight;
+        level.objects = newObjects;
+    }
+
+    function mergeExtraLevel(baseLevel, overlayLevel, lineNumber) {
+        if (!state.extraBoardEnabled) {
+            logError("The EXTRA separator in LEVELS requires the EXTRA_BOARD prelude flag.", lineNumber);
+            return false;
+        }
+        const mergedWidth = Math.max(baseLevel.width, overlayLevel.width);
+        const mergedHeight = Math.max(baseLevel.height, overlayLevel.height);
+        resizeLevelTo(baseLevel, mergedWidth, mergedHeight);
+        baseLevel.extraBoardWidth = overlayLevel.width;
+        baseLevel.extraBoardHeight = overlayLevel.height;
+
+        const startLayer = state.extraBaseLayerCount || 0;
+        const extraAllMask = new BitVec(STRIDE_OBJ);
+        for (const baseIdText of Object.keys(state.extraIdByBaseId || {})) {
+            const extraId = state.extraIdByBaseId[baseIdText];
+            if (extraId !== undefined) {
+                extraAllMask.ibitset(extraId);
+            }
+        }
+
+        // Clear existing extra-board content first so the overlay fully defines it.
+        for (let i = 0; i < baseLevel.n_tiles; i++) {
+            const cell = baseLevel.getCell(i);
+            cell.iclear(extraAllMask);
+            baseLevel.setCell(i, cell);
+        }
+
+        for (let x = 0; x < overlayLevel.width; x++) {
+            for (let y = 0; y < overlayLevel.height; y++) {
+                const baseIndex = y + x * baseLevel.height;
+                const overlayIndex = y + x * overlayLevel.height;
+                const baseCell = baseLevel.getCell(baseIndex);
+                const overlayCell = overlayLevel.getCell(overlayIndex);
+
+                for (let layerIndex = startLayer; layerIndex < state.layerMasks.length; layerIndex++) {
+                    const layerIds = layerObjectIds[layerIndex] || [];
+                    let overlayId = -1;
+                    for (const id of layerIds) {
+                        if (overlayCell.get(id)) {
+                            overlayId = id;
+                            break;
+                        }
+                    }
+                    if (overlayId === -1) {
+                        continue;
+                    }
+                    baseCell.iclear(state.layerMasks[layerIndex]);
+                    baseCell.ibitset(overlayId);
+                }
+                baseLevel.setCell(baseIndex, baseCell);
+            }
+        }
+        return true;
+    }
     
     if (state.levels.at(-1).length == 0)
         state.levels.pop();
@@ -17172,6 +18095,11 @@ function levelsToArray(state) {
             logError('LAYER must be followed immediately by map rows.', level[2]);
             expectLayerGrid = false;
             expectLayerLine = null;
+        }
+        if (typeof level[0] === 'string' && level[0] !== 'extra' && expectExtraGrid) {
+            logError('EXTRA must be followed immediately by map rows.', level[2]);
+            expectExtraGrid = false;
+            expectExtraLine = null;
         }
 		if (level[0] == 'message') {
             if (gotoFlag) logWarning('Message unreachable due to previous GOTO.', level[2]);
@@ -17193,9 +18121,11 @@ function levelsToArray(state) {
             gotoFlag = true;
 		} else if (level[0] == 'section') {
             section = level[1];
+            sectionDeclarations.push(section);
             gotoFlag = false;
 		} else if (level[0] == 'level') {
             title = level[1];           // !!!
+            levelTitleExplicit = true;
 		} else if (level[0] == 'title') {
             description = level[1];     // todo: 
             logWarning(`Option TITLE is not implemented, but may be in the future. Let me know if you really need it.`,state.lineNumber);
@@ -17218,34 +18148,61 @@ function levelsToArray(state) {
                 expectLayerGrid = true;
                 expectLayerLine = level[2];
             }
+		} else if (level[0] == 'extra') {
+            if (level[1] && level[1].trim().length > 0)
+                logWarning(`EXTRA does not take text, so "${level[1].trim()}" is ignored.`, level[2]);
+            if (expectExtraGrid) {
+                logError('EXTRA cannot appear twice in a row without map rows in between.', level[2]);
+            } else if (!isGridLevel(levels.at(-1))) {
+                logError('EXTRA must follow a map in the LEVELS section.', level[2]);
+            } else if (!state.extraBoardEnabled) {
+                logError("EXTRA in LEVELS requires the EXTRA_BOARD prelude flag.", level[2]);
+            } else {
+                expectExtraGrid = true;
+                expectExtraLine = level[2];
+            }
 		} else {
             if (gotoFlag && links.length == 0) 
                 logWarning('Level unreachable due to previous GOTO.', level[0]);
             level[1] = section; // todo: fix it
-            const compiledLevel = levelFromString(state, level);
+            const compiledLevel = levelFromString(state, level, expectExtraGrid);
             if (expectLayerGrid && isGridLevel(levels.at(-1))) {
                 if (!mergeLevelLayer(levels.at(-1), compiledLevel, level[0])) {
                     levels.push(compiledLevel);
                     levels.at(-1).title = title;
+                    levels.at(-1).isLabeledLevel = !!levelTitleExplicit;
                     levels.at(-1).linksTop = links.length;
                     if (input) levels.at(-1).input = input;
                     ++levelNo;
                     title = null;
+                    levelTitleExplicit = false;
                 }
                 expectLayerGrid = false;
                 expectLayerLine = null;
+            } else if (expectExtraGrid && isGridLevel(levels.at(-1))) {
+                mergeExtraLevel(levels.at(-1), compiledLevel, level[0]);
+                expectExtraGrid = false;
+                expectExtraLine = null;
             } else {
+                if (state.extraBoardEnabled) {
+                    initExtraBoard(compiledLevel);
+                }
 			    levels.push(compiledLevel);
                 levels.at(-1).title = title;
+                levels.at(-1).isLabeledLevel = !!levelTitleExplicit;
                 levels.at(-1).linksTop = links.length;
                 if (input) levels.at(-1).input = input;
                 ++levelNo;
                 title = null;
+                levelTitleExplicit = false;
             }
 		}
 	});
     if (expectLayerGrid) {
         logError('LAYER must be followed by another map block.', expectLayerLine);
+    }
+    if (expectExtraGrid) {
+        logError('EXTRA must be followed by another map block.', expectExtraLine);
     }
     links.forEach(link => {
         let index = -9999;
@@ -17260,30 +18217,141 @@ function levelsToArray(state) {
     });
 	state.levels = levels;
 	state.links = links;
+    state.sectionDeclarations = sectionDeclarations;
 }
 
 function extractSections(state) {
 	var sections = [];
+    state.winSection = undefined;
 
+    // Sections discovered from actual level blocks (legacy behavior).
+    var levelSections = [];
 	var lastSection = null;
-
 	for(var i = 0; i < state.levels.length; i++) {
 		var level = state.levels[i];
 		
 		if(level.section != lastSection) {
 			var o = {
 				name: level.section,
-				firstLevel: i
+				firstLevel: i,
+                hasLevels: true
 			};
 			if(o.name == "__WIN__") {
 				state.winSection = o;
 			} else {
-				sections.push(o);
+				levelSections.push(o);
 			}
 			
 			lastSection = level.section;
 		}
 	}
+
+    // Prefer declaration order so empty/group-only sections are preserved.
+    const declarations = Array.isArray(state.sectionDeclarations) ? state.sectionDeclarations : [];
+    if (declarations.length > 0) {
+        let levelCursor = 0;
+        for (const declaredName of declarations) {
+            if (declaredName === "__WIN__") {
+                if (!state.winSection) {
+                    state.winSection = {
+                        name: "__WIN__",
+                        firstLevel: -1,
+                        hasLevels: false
+                    };
+                }
+                continue;
+            }
+
+            const entry = {
+                name: declaredName,
+                firstLevel: -1,
+                hasLevels: false
+            };
+
+            let matchedIndex = -1;
+            for (let j = levelCursor; j < levelSections.length; j++) {
+                if (levelSections[j].name === declaredName) {
+                    matchedIndex = j;
+                    break;
+                }
+            }
+            if (matchedIndex >= 0) {
+                entry.firstLevel = levelSections[matchedIndex].firstLevel;
+                entry.hasLevels = true;
+                levelCursor = matchedIndex + 1;
+            }
+            sections.push(entry);
+        }
+
+        // Keep any implicit sections that were never explicitly declared.
+        for (let j = levelCursor; j < levelSections.length; j++) {
+            sections.push(levelSections[j]);
+        }
+    } else {
+        sections = levelSections;
+    }
+
+	// Build optional hierarchy from leading "\" in section names.
+	// More leading "\" means deeper nesting, parent is the nearest previous
+	// section with fewer leading "\".
+	const countLeadingBackslashes = name => {
+		if (typeof name !== "string") return 0;
+		let depth = 0;
+		while (depth < name.length && name.charAt(depth) === "\\") depth++;
+		return depth;
+	};
+	const stripLeadingBackslashes = name => {
+		if (typeof name !== "string") return name;
+		return name.slice(countLeadingBackslashes(name));
+	};
+
+	for (let i = 0; i < sections.length; i++) {
+		const section = sections[i];
+		section.depth = countLeadingBackslashes(section.name);
+		const display = stripLeadingBackslashes(section.name);
+		section.displayName = (display === "") ? "\\" : display;
+		section.parentSection = -1;
+		section.childSections = [];
+        section.isDirectory = false;
+
+		if (section.depth > 0) {
+			for (let p = i - 1; p >= 0; p--) {
+				if ((sections[p].depth || 0) < section.depth) {
+					section.parentSection = p;
+					break;
+				}
+			}
+		}
+	}
+
+	for (let i = 0; i < sections.length; i++) {
+		const parentIndex = sections[i].parentSection;
+		if (parentIndex >= 0 && sections[parentIndex]) {
+			sections[parentIndex].childSections.push(i);
+		}
+	}
+
+    // Directory sections should still have a sensible firstLevel for GOTO.
+    const firstDescendantLevel = function(sectionIndex) {
+        const section = sections[sectionIndex];
+        if (!section) return -1;
+        if (section.firstLevel >= 0) return section.firstLevel;
+        let best = -1;
+        for (const childIndex of section.childSections) {
+            const childLevel = firstDescendantLevel(childIndex);
+            if (childLevel >= 0 && (best < 0 || childLevel < best)) {
+                best = childLevel;
+            }
+        }
+        return best;
+    };
+
+    for (let i = 0; i < sections.length; i++) {
+        sections[i].isDirectory = sections[i].childSections.length > 0;
+        if (sections[i].firstLevel < 0) {
+            sections[i].firstLevel = firstDescendantLevel(i);
+        }
+    }
 
 	state.sections = sections;
 }
@@ -17553,7 +18621,7 @@ function processRuleString(rule, state, curRules) {
                     logError("Error, an item can only have one direction/action at a time, but you're looking for several at once!", lineNumber);
                 } else if (!incellrow) {
                     logWarning("Invalid syntax. Directions should be placed at the start of a rule.", lineNumber);
-                } else if (late && token!=='no' && token!=='random' && token!=='randomdir') {
+                } else if (late && token!=='no' && token!=='random' && token!=='randomdir' && token!=='extra') {
                     logError("Movements cannot appear in late rules.", lineNumber);
                   } else {
                     curcell.push(token);
@@ -17635,11 +18703,27 @@ function processRuleString(rule, state, curRules) {
                 if (needarg || twid) {
                     if (twid && !state.metadata.runtime_metadata_twiddling) {
                         logError("You can only change a flag at runtime if you have the 'runtime_metadata_twiddling' prelude flag defined!",lineNumber)
+                    } else if (tok === 'border' && !state.metadata.runtime_border_twiddling) {
+                        logError("You can only use BORDER at runtime if you have the 'runtime_border_twiddling' prelude flag defined!", lineNumber);
                     } else {
                         const index = findIndexAfterToken(origLine,tokens,i);
                         const str = origLine.substring(index).trim();
                         if (twid && str == "")
                             logError('You included a twiddleable option, but did not specify a value. The twiddle may behave strangely. Please use "set", "default", "wipe", or specify the correct value. See the documentation for more info.', lineNumber);
+                        if (tok === 'border') {
+                            const parts = str.split(/[\s,]+/).filter(Boolean);
+                            if (parts.length < 2) {
+                                logError('BORDER expects two arguments: direction and amount, for example "border right 2".', lineNumber);
+                            } else {
+                                const dir = parts[0].toLowerCase();
+                                if (['right', 'left', 'up', 'down', '<', '>', '^', 'v'].indexOf(dir) < 0) {
+                                    logError(`BORDER direction "${parts[0]}" is invalid. Use right/left/up/down or <>^v.`, lineNumber);
+                                }
+                                if (!/^[-+]?\d+$/.test(parts[1])) {
+                                    logError(`BORDER amount "${parts[1]}" is invalid. Use an integer.`, lineNumber);
+                                }
+                            }
+                        }
                         //needs to be nonempty or the system gets confused and thinks it's a whole level message rather than an interstitial.
                         commands.push([tok, str == "" ? " " : str]);
                     }
@@ -17757,6 +18841,33 @@ function absolutifyBorderCommands(rule) {
     }
 }
 
+function mapExtraQualifiedName(state, ident, lineNumber) {
+    if (!state.extraBoardEnabled) {
+        logError('The EXTRA qualifier can only be used when EXTRA_BOARD is enabled in the prelude.', lineNumber);
+        return ident;
+    }
+    const mapped = state.extraNameMap && state.extraNameMap[ident];
+    if (mapped) {
+        return mapped;
+    }
+    logError(`EXTRA qualifier used with "${errorCase(ident)}", but that name has no extra-board variant.`, lineNumber);
+    return ident;
+}
+
+function rewriteExtraBoardQualifiers(state, rule) {
+    function rewriteCell(cell) {
+        for (let i = 0; i < cell.length; i += 2) {
+            if (cell[i] === 'extra') {
+                cell[i] = '';
+                cell[i + 1] = mapExtraQualifiedName(state, cell[i + 1], rule.lineNumber);
+            }
+        }
+    }
+
+    rule.lhs.forEach(row => row.forEach(rewriteCell));
+    rule.rhs.forEach(row => row.forEach(rewriteCell));
+}
+
 // make multiple passes to parse and expand rules, with absolute directions and objects
 function rulesToArray(state) {
     let rules = parseRulesToArray(state);
@@ -17768,6 +18879,7 @@ function rulesToArray(state) {
     checkRuleObjects(state, rules);
     rules = expandRulesWithMultiDirectionObjects(state, rules);
     for (const rule of rules) {
+        rewriteExtraBoardQualifiers(state, rule);
         absolutifyBorderCommands(rule);
         if (!debugSwitch.includes('noul')) rewriteUpLeftRules(rule);
         atomizeAggregates(state, rule);
@@ -18926,6 +20038,82 @@ function cellRowMasks_Movements(rule){
 }
 
 function collapseRules(groups) {
+    function getRuleBoardScope(oldrule) {
+        if (!state.extraBoardEnabled || (!state.baseIdByExtraId && !state.extraIdByBaseId)) {
+            return 0;
+        }
+
+        let touchesMain = false;
+        let touchesExtra = false;
+
+        function markObjectId(id) {
+            if (!isFinite(id) || isNaN(id) || id < 0) {
+                return;
+            }
+            if (state.baseIdByExtraId && state.baseIdByExtraId[id] !== undefined) {
+                touchesExtra = true;
+            } else if (state.extraIdByBaseId && state.extraIdByBaseId[id] !== undefined) {
+                touchesMain = true;
+            } else {
+                // Fallback for non-duplicated IDs: treat as main-board objects.
+                touchesMain = true;
+            }
+        }
+
+        function markMask(mask) {
+            if (!mask) {
+                return;
+            }
+            if (Array.isArray(mask)) {
+                for (const sub of mask) {
+                    markMask(sub);
+                    if (touchesMain && touchesExtra) {
+                        return;
+                    }
+                }
+                return;
+            }
+            if (typeof mask.get !== 'function') {
+                return;
+            }
+            for (let id = 0; id < state.objectCount; id++) {
+                if (mask.get(id)) {
+                    markObjectId(id);
+                    if (touchesMain && touchesExtra) {
+                        return;
+                    }
+                }
+            }
+        }
+
+        for (const row of oldrule.lhs) {
+            for (const cell of row) {
+                if (cell === ellipsisPattern) {
+                    continue;
+                }
+                markMask(cell.objectsPresent);
+                markMask(cell.objectsMissing);
+                markMask(cell.anyObjectsPresent);
+                if (cell.replacement) {
+                    markMask(cell.replacement.objectsClear);
+                    markMask(cell.replacement.objectsSet);
+                    markMask(cell.replacement.randomEntityMask);
+                }
+                if (touchesMain && touchesExtra) {
+                    return 0;
+                }
+            }
+        }
+
+        if (touchesMain && !touchesExtra) {
+            return 1;
+        }
+        if (touchesExtra && !touchesMain) {
+            return 2;
+        }
+        return 0;
+    }
+
     for (var gn = 0; gn < groups.length; gn++) {
         var rules = groups[gn];
         for (var i = 0; i < rules.length; i++) {
@@ -18962,6 +20150,7 @@ function collapseRules(groups) {
             newrule.push(cellRowMasks_Movements(newrule));
             newrule.push(oldrule.globalRule);
             newrule.push(oldrule.isOnce);
+            newrule.push(getRuleBoardScope(oldrule));
             rules[i] = new Rule(newrule);
         }
     }
@@ -20311,9 +21500,9 @@ function matchGlyph(inputmask,glyphAndMask) {
 	var highestbitcount=-1;
 	var highestmask;
 	for (var i=0; i<glyphAndMask.length; ++i) {
-		var glyphname = glyphAndMask[i][0];
-		var glyphmask = glyphAndMask[i][1];
- 		var glyphbits = glyphAndMask[i][2];
+		var glyphname = glyphAndMask[i].name;
+		var glyphmask = glyphAndMask[i].matchMask;
+ 		var glyphbits = glyphAndMask[i].fullMask;
 		//require all bits of glyph to be in input
 		if (glyphmask.bitsSetInArray(inputmask.data)) {
 			var bitcount = 0;
@@ -20350,40 +21539,193 @@ var selectableint  = 0;
 
 function printLevel() {
 	var glyphMasks = [];
+	var glyphByMask = {};
+	var backgroundMask = state.layerMasks[state.backgroundlayer];
+	var backgroundOnly = new BitVec(STRIDE_OBJ);
+	backgroundOnly.ibitset(state.backgroundid);
+	var backgroundOnlyKey = bitVecKey(backgroundOnly);
+	var backgroundGlyph = '.';
+	var warnedApprox = false;
+	var warnedNoBackgroundGlyph = false;
+
+	function bitVecKey(vec) {
+		return Array.from(vec.data).join(',');
+	}
+
+	function bitCount(vec) {
+		var c = 0;
+		for (var bit = 0; bit < 32 * STRIDE_OBJ; ++bit) {
+			if (vec.get(bit))
+				c++;
+		}
+		return c;
+	}
+
+	function overlapCount(a, b) {
+		var c = 0;
+		for (var bit = 0; bit < 32 * STRIDE_OBJ; ++bit) {
+			if (a.get(bit) && b.get(bit))
+				c++;
+		}
+		return c;
+	}
+
+	function chooseBestGlyphForResidual(residual) {
+		var best = null;
+		for (var i = 0; i < glyphMasks.length; ++i) {
+			var glyph = glyphMasks[i];
+			if (glyph.contributionCount <= 0)
+				continue;
+			if (glyph.contributionMask.bitsSetInArray(residual.data)) {
+				if (best == null || glyph.contributionCount > best.contributionCount)
+					best = glyph;
+			}
+		}
+		return best;
+	}
+
+	function chooseApproxGlyphForResidual(residual) {
+		var best = null;
+		var bestOverlap = 0;
+		var bestWaste = Number.MAX_SAFE_INTEGER;
+		for (var i = 0; i < glyphMasks.length; ++i) {
+			var glyph = glyphMasks[i];
+			if (glyph.contributionCount <= 0)
+				continue;
+			var overlap = overlapCount(glyph.contributionMask, residual);
+			if (overlap <= 0)
+				continue;
+			var waste = glyph.contributionCount - overlap;
+			if (best == null || overlap > bestOverlap || (overlap === bestOverlap && waste < bestWaste)) {
+				best = glyph;
+				bestOverlap = overlap;
+				bestWaste = waste;
+			}
+		}
+		return best;
+	}
+
+	function clearOverlapFromResidual(residual, mask) {
+		for (var bit = 0; bit < 32 * STRIDE_OBJ; ++bit) {
+			if (mask.get(bit) && residual.get(bit))
+				residual.ibitclear(bit);
+		}
+	}
+
+	function decomposeCell(cellMask) {
+		var exact = glyphByMask[bitVecKey(cellMask)];
+		if (exact !== undefined)
+			return [ exact ];
+
+		var residual = cellMask.clone();
+		residual.ibitclear(state.backgroundid);
+		var parts = [];
+		while (!residual.iszero()) {
+			var best = chooseBestGlyphForResidual(residual);
+			if (best == null)
+				break;
+			parts.push(best.name);
+			residual.iclear(best.contributionMask);
+		}
+
+		if (!residual.iszero()) {
+			if (!warnedApprox) {
+				consolePrint('Level export warning: some cells cannot be represented exactly by available single-character glyphs.', true);
+				warnedApprox = true;
+			}
+			var safety = 0;
+			while (!residual.iszero() && safety < state.objectCount) {
+				var approx = chooseApproxGlyphForResidual(residual);
+				if (approx == null)
+					break;
+				parts.push(approx.name);
+				clearOverlapFromResidual(residual, approx.contributionMask);
+				safety++;
+			}
+		}
+		if (parts.length == 0)
+			return [ matchGlyph(cellMask, glyphMasks) ];
+		return parts;
+	}
+
 	for (var glyphName in state.glyphDict) {
 		if (state.glyphDict.hasOwnProperty(glyphName)&&glyphName.length===1) {
 			var glyph = state.glyphDict[glyphName];
-			var glyphmask=new BitVec(STRIDE_OBJ);
+			var fullMask = new BitVec(STRIDE_OBJ);
 			for (var i=0;i<glyph.length;i++)
 			{
 				var id = glyph[i];
 				if (id>=0) {
-					glyphmask.ibitset(id);
+					fullMask.ibitset(id);
 				}
 			}
-			var glyphbits = glyphmask.clone();
-			//register the same - backgroundmask with the same name
-			var bgMask = state.layerMasks[state.backgroundlayer];
-			glyphmask.iclear(bgMask);
-			glyphMasks.push([glyphName, glyphmask, glyphbits]);
+			var matchMask = fullMask.clone();
+			matchMask.iclear(backgroundMask);
+			var contributionMask = fullMask.clone();
+			contributionMask.ibitclear(state.backgroundid);
+			var glyphInfo = {
+				name: glyphName,
+				matchMask: matchMask,
+				fullMask: fullMask,
+				contributionMask: contributionMask,
+				contributionCount: bitCount(contributionMask)
+			};
+			glyphMasks.push(glyphInfo);
+
+			var fullKey = bitVecKey(fullMask);
+			if (glyphByMask[fullKey] === undefined)
+				glyphByMask[fullKey] = glyphName;
+			if (fullKey === backgroundOnlyKey)
+				backgroundGlyph = glyphName;
 		}
 	}
+
+	if (glyphByMask[backgroundOnlyKey] === undefined) {
+		for (var g = 0; g < glyphMasks.length; g++) {
+			if (glyphMasks[g].contributionCount === 0) {
+				backgroundGlyph = glyphMasks[g].name;
+				break;
+			}
+		}
+		if (backgroundGlyph === '.' && !warnedNoBackgroundGlyph) {
+			consolePrint('Level export warning: no explicit background glyph found; using "." as layer filler.', true);
+			warnedNoBackgroundGlyph = true;
+		}
+	}
+
+	var perCellLayers = [];
+	var maxLayerCount = 1;
+	for (var y = 0; y < curLevel.height; y++) {
+		for (var x = 0; x < curLevel.width; x++) {
+			var cellIndex = y + x * curLevel.height;
+			var cellMask = curLevel.getCell(cellIndex);
+			var parts = decomposeCell(cellMask);
+			perCellLayers[cellIndex] = parts;
+			if (parts.length > maxLayerCount)
+				maxLayerCount = parts.length;
+		}
+	}
+
 	selectableint++;
 	var tag = 'selectable'+selectableint;
 	var output="Printing level contents:<br><br><span id=\""+tag+"\" onclick=\"selectText('"+tag+"',event)\"><br>";
 	cache_console_messages = false;
-	for (var j=0;j<curLevel.height;j++) {
-		for (var i=0;i<curLevel.width;i++) {
-			var cellIndex = j+i*curLevel.height;
-			var cellMask = curLevel.getCell(cellIndex);
-			var glyph = matchGlyph(cellMask,glyphMasks);
-			if (glyph in htmlEntityMap) {
-				glyph = htmlEntityMap[glyph]; 
+	for (var layerIndex = 0; layerIndex < maxLayerCount; layerIndex++) {
+		for (var j=0;j<curLevel.height;j++) {
+			for (var i=0;i<curLevel.width;i++) {
+				var cIndex = j + i * curLevel.height;
+				var glyph = perCellLayers[cIndex][layerIndex] || backgroundGlyph;
+				if (glyph in htmlEntityMap) {
+					glyph = htmlEntityMap[glyph]; 
+				}
+				output = output + glyph;
 			}
-			output = output+glyph;
+			if (j < curLevel.height - 1 || layerIndex < maxLayerCount - 1) {
+				output = output + "<br>";
+			}
 		}
-		if (j<curLevel.height-1){
-			output=output+"<br>";
+		if (layerIndex < maxLayerCount - 1) {
+			output = output + "layer<br>";
 		}
 	}
 	output+="</span><br><br>"
@@ -20392,11 +21734,15 @@ function printLevel() {
 
 function levelEditorClick(event,click) {
 	if (mouseCoordY<=-2) {
+		var paletteCols = Math.max(2, Math.floor(canvas.width / cellwidth));
+		var paletteCellWidth = cellwidth;
+		var paletteSlotsPerRow = paletteCols - 1;
+		var paletteMouseCol = Math.floor((mousePixelX + xoffset) / paletteCellWidth);
 		var ypos = editorRowCount-(-mouseCoordY-2)-1;
-		var newindex=mouseCoordX+(screenwidth-1)*ypos;
-		if (mouseCoordX===-1) {
+		var newindex=(paletteMouseCol-1)+paletteSlotsPerRow*ypos;
+		if (paletteMouseCol===0) {
 			printLevel();
-		} else if (mouseCoordX>=0&&newindex<glyphImages.length) {
+		} else if (paletteMouseCol>=1&&paletteMouseCol<paletteCols&&newindex<glyphImages.length) {
 			glyphSelectedIndex=newindex;
 			redraw();
 		}
@@ -20404,32 +21750,32 @@ function levelEditorClick(event,click) {
 	} else if (mouseCoordX>-1&&mouseCoordY>-1&&mouseCoordX<screenwidth-2&&mouseCoordY<screenheight-2-editorRowCount	) {
 		var glyphname = glyphImagesCorrespondance[glyphSelectedIndex];
 		var glyph = state.glyphDict[glyphname];
-		var glyphmask = new BitVec(STRIDE_OBJ);
-		for (var i=0;i<glyph.length;i++)
-		{
-			var id = glyph[i];
-			if (id>=0) {
-				glyphmask.ibitset(id);
-			}			
-		}
-
 		var backgroundMask = state.layerMasks[state.backgroundlayer];
-		if (glyphmask.bitsClearInArray(backgroundMask.data)) {
-			// If we don't already have a background layer, mix in
-			// the default one.
-			glyphmask.ibitset(state.backgroundid);
-		}
 
 		var coordIndex = mouseCoordY + mouseCoordX*curLevel.height;
-		var getcell = curLevel.getCell(coordIndex);
-		if (getcell.equals(glyphmask)) {
+		var oldCell = curLevel.getCell(coordIndex);
+		var newCell = oldCell.clone();
+		for (var layerIndex = 0; layerIndex < glyph.length; layerIndex++) {
+			var id = glyph[layerIndex];
+			if (id >= 0) {
+				newCell.iclear(state.layerMasks[layerIndex]);
+				newCell.ibitset(id);
+			}
+		}
+		if (newCell.bitsClearInArray(backgroundMask.data)) {
+			// If we don't already have a background layer, mix in
+			// the default one.
+			newCell.ibitset(state.backgroundid);
+		}
+
+		if (oldCell.equals(newCell)) {
 			return;
 		} else {
 			if (anyEditsSinceMouseDown===false) {
 				anyEditsSinceMouseDown=true;				
         		backups.push(backupLevel());
 			}
-			curLevel.setCell(coordIndex, glyphmask);
+			curLevel.setCell(coordIndex, newCell);
 			redraw();
 		}
 	}
@@ -20454,8 +21800,12 @@ function levelEditorClick(event,click) {
 
 function levelEditorRightClick(event,click) {
 	if (mouseCoordY===-2) {
-		if (mouseCoordX<=glyphImages.length) {
-			glyphSelectedIndex=mouseCoordX;
+		var paletteCols = Math.max(2, Math.floor(canvas.width / cellwidth));
+		var paletteCellWidth = cellwidth;
+		var paletteMouseCol = Math.floor((mousePixelX + xoffset) / paletteCellWidth);
+		var glyphIndex = paletteMouseCol - 1;
+		if (paletteMouseCol>=1 && paletteMouseCol<paletteCols && glyphIndex<glyphImages.length) {
+			glyphSelectedIndex=glyphIndex;
 			redraw();
 		}
 	} else if (mouseCoordX>-1&&mouseCoordY>-1&&mouseCoordX<screenwidth-2&&mouseCoordY<screenheight-2-editorRowCount	) {
@@ -20669,19 +22019,21 @@ function mouseAction(event,click,id) {
 			} else if (titleMode===2) { //Level select
 				generateLevelSelectScreen(mouseCoordY);
 				if (mouseCoordY == 0) {			// ESC back
-					goToTitleScreen();
-					tryPlayTitleSound();
+					if (!levelSelectGoBack()) {
+						goToTitleScreen();
+						tryPlayTitleSound();
+					}
 				} else if (mouseCoordY == 2) {
 					if (levelSelectScrollPos != 0) {
-						levelSelectScroll(-3)
+						generateLevelSelectScreen(-1, -1)
 					}
 				} else if (mouseCoordY == 12) {
-					if (state.sections.length - amountOfLevelsOnScreen > levelSelectScrollPos) {
-						levelSelectScroll(3)
+					if (levelSelectEntries.length - amountOfLevelsOnScreen > levelSelectScrollPos) {
+						generateLevelSelectScreen(-1, 1)
 					}
 				} else if (mouseCoordY > 2 && mouseCoordY < 12) {
 					const clickedLevel = mouseCoordY - 3 + levelSelectScrollPos;
-					if (clickedLevel < state.sections.length) {
+					if (clickedLevel < levelSelectEntries.length) {
 						// do this first, because it will get cancelled if locked
 						if (titleSelection != null) {
 							titleSelected=true;
@@ -20829,7 +22181,7 @@ function onMouseDown(event, wasFiredByTouch = false) {
 	if (lmb ) {
         lastDownTarget = event.target;
         keybuffer=[];
-        if (event.target===canvas || event.target.className==="tapFocusIndicator") {
+        if (event.target===canvas || event.target.id==="gameCanvas3D" || event.target.className==="tapFocusIndicator") {
         	setMouseCoord(event);
         	dragging=true;
         	rightdragging=false;
@@ -20849,7 +22201,7 @@ function onMouseDown(event, wasFiredByTouch = false) {
         dragging=false;
         rightdragging=false; 
     } else if (rmb) {
-    	if (event.target.id==="gameCanvas") {
+    	if (event.target.id==="gameCanvas" || event.target.id==="gameCanvas3D") {
 			setMouseCoord(event);
 		    dragging=false;
 		    rightdragging=true;
@@ -20903,7 +22255,7 @@ function onMouseUp(event, wasFiredByTouch = false) {
 	}
 
 	if (lmb) {
-        if (event.target===canvas) {
+        if (event.target===canvas || event.target.id==="gameCanvas3D") {
         	setMouseCoord(event);
         	if ("mouse_up" in state.metadata) {
 				if (wasFiredByTouch) {
@@ -20913,7 +22265,7 @@ function onMouseUp(event, wasFiredByTouch = false) {
 			}
         }
     } else if (rmb) {
-    	if (event.target.id==="gameCanvas") {
+    	if (event.target.id==="gameCanvas" || event.target.id==="gameCanvas3D") {
         	setMouseCoord(event);
         	if ("mouse_rup" in state.metadata) {
 				return mouseAction(event,true,state.rmbupID);
@@ -20944,7 +22296,11 @@ function onKeyDown(event) {
     	return prevent(event);
     }
 
-    if(lastDownTarget === canvas || (window.Mobile && (lastDownTarget === window.Mobile.focusIndicator) ) ){
+    const isGameCanvas = lastDownTarget === canvas ||
+      (lastDownTarget && lastDownTarget.id === 'gameCanvas3D') ||
+      (window.Mobile && (lastDownTarget === window.Mobile.focusIndicator));
+
+    if (isGameCanvas){
     	if (keybuffer.indexOf(event.keyCode)===-1) {
     		if (event&&(event.ctrlKey || event.metaKey)){
 		    } else {
@@ -21406,10 +22762,15 @@ function checkKey(e,justPressed) {
 			} else if (!titleScreen || titleMode > 1) {
 				if ((timer/1000>0.5 || titleMode > 1) && !quittingTitleScreen && justPressed) {
 
-					titleSelection = 0;
-					
 					timer = 0;
-					if(!titleScreen && state.metadata.level_select) {
+
+					if (titleScreen && titleMode === 2 && state.metadata.level_select && levelSelectGoBack()) {
+						canvasResize();
+						return prevent(e);
+					}
+
+					titleSelection = 0;
+					if (!titleScreen && state.metadata.level_select) {
 						titleSelection = null;
 						gotoLevelSelectScreen();
 					} else {
@@ -21512,7 +22873,7 @@ function checkKey(e,justPressed) {
 			}
 		}
     }
-    if (debugSwitch.includes('input')) console.log('checkKey', prevTimestamp, throttle_movement, inputdir, input_throttle_timer, repeatinterval);
+	if (debugSwitch.includes('input')) console.log('checkKey', prevTimestamp, throttle_movement, inputdir, input_throttle_timer, repeatinterval);
     if (throttle_movement && inputdir>=0&&inputdir<=3) {
     	if (lastinput==inputdir && input_throttle_timer<repeatinterval) {
     		return prevent(e);
@@ -21611,6 +22972,7 @@ function checkKey(e,justPressed) {
 
             } else {
                 pushInput(inputdir);
+                if (typeof snapshotLevelState === 'function') snapshotLevelState();
                 if (processInput(inputdir)) {
                     redraw();
                 }
@@ -21645,6 +23007,7 @@ function update() {
     if (againing) {
         if (timer>againinterval && messagetext == "") {
         //if (timer>againinterval && messagetext == "" && !isTweening) {
+            if (typeof snapshotLevelState === 'function') snapshotLevelState();
             if (processInput(-1)) {
                 draw = true;
                 keyRepeatTimer=0;
@@ -21702,6 +23065,7 @@ function update() {
         if (autotick>autotickinterval) {
             autotick=0;
             pushInput("tick");
+            if (typeof snapshotLevelState === 'function') snapshotLevelState();
             if (processInput(-1)) {
                 draw = true;
             }
@@ -21740,7 +23104,6 @@ var loop = function(timestamp){
 }
 
 window.requestAnimationFrame(loop);
-
 </script>
 <script>
 /*
