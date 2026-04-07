@@ -66,7 +66,7 @@ With this command, your game can expand or shrink the current level bounds while
 <h2>How to enable it</h2>
 <ol>
   <li>Add <b>runtime_border_twiddling</b> in the prelude.</li>
-  <li>Use <b>border</b> at the end of rules.</li>
+  <li>Use <b>border</b> in rules where you want the resize to happen.</li>
 </ol>
 
 <pre><code>title Border Demo
@@ -89,13 +89,15 @@ Use <b>border &lt;direction&gt; &lt;amount&gt;</b>.
 
 <h2>When the resize happens</h2>
 <p>
-<b>Border changes are applied after the current rule pass for the turn finishes,</b> so all matching/replacement logic for that pass runs first.
+<b>Border changes are applied immediately when the command is triggered.</b>
+Any rules that run later in the same turn will use the updated board size.
 </p>
 
 <h2>Notes</h2>
 <ul>
   <li>Without <b>runtime_border_twiddling</b>, the <b>border</b> command is disabled.</li>
   <li>If shrinking would remove too many cells, the level is clamped to a minimum size.</li>
+  <li>If multiple <b>border</b> commands trigger in one turn, they are applied in trigger order.</li>
   <li>This feature works with <b>again</b> loops, so bounds can change over multiple automatic turns.</li>
 </ul>
 
