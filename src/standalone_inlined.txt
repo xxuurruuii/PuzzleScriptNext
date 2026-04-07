@@ -12578,11 +12578,13 @@ Rule.prototype.tryApply = function(level) {
       return false;
     }
 	perfCounters.matched++;
+	let commandRepeatCount = 1;
 
     var result=false;	
 	if (this.hasReplacements) {
 	perfCounters.replaces++;
 	var tuples = generateTuples(matches);
+		commandRepeatCount = Math.max(1, tuples.length);
 	    for (var tupleIndex=0;tupleIndex<tuples.length;tupleIndex++) {
 	        var tuple = tuples[tupleIndex];
 	        var shouldCheck=tupleIndex>0;
@@ -12593,7 +12595,7 @@ Rule.prototype.tryApply = function(level) {
 	}
 
     if (matches.length>0) {
-      this.queueCommands();
+      this.queueCommands(commandRepeatCount);
     }
     return result;
 };
@@ -12890,6 +12892,9 @@ function applyBorderResize(direction, amount) {
 	const oldWidth = curLevel.width;
 	const oldHeight = curLevel.height;
 	const extraSnapshot = snapshotExtraBoard(curLevel);
+	const oldMovements = curLevel.movements;
+	const oldRigidApplied = curLevel.rigidMovementAppliedMask;
+	const oldRigidGroups = curLevel.rigidGroupIndexMask;
 	const effectiveAmount = normalizeBorderAmount(direction, amount, oldMainWidth, oldMainHeight);
 	if (effectiveAmount === 0) {
 		return false;
@@ -12906,6 +12911,9 @@ function applyBorderResize(direction, amount) {
 
 	const oldObjects = curLevel.objects;
 	const newObjects = new Int32Array(newWidth * newHeight * STRIDE_OBJ);
+	const newMovements = new Int32Array(newWidth * newHeight * STRIDE_MOV);
+	const newRigidApplied = [];
+	const newRigidGroups = [];
 	const bgMask = new BitVec(STRIDE_OBJ);
 	bgMask.ibitset(state.backgroundid);
 	for (let i = 0; i < newWidth * newHeight; i++) {
@@ -12934,6 +12942,11 @@ function applyBorderResize(direction, amount) {
 			for (let w = 0; w < STRIDE_OBJ; w++) {
 				newObjects[newIndex * STRIDE_OBJ + w] = oldObjects[oldIndex * STRIDE_OBJ + w];
 			}
+			for (let w = 0; w < STRIDE_MOV; w++) {
+				newMovements[newIndex * STRIDE_MOV + w] = oldMovements[oldIndex * STRIDE_MOV + w];
+			}
+			newRigidApplied[newIndex] = oldRigidApplied[oldIndex] ? oldRigidApplied[oldIndex].clone() : new BitVec(STRIDE_MOV);
+			newRigidGroups[newIndex] = oldRigidGroups[oldIndex] ? oldRigidGroups[oldIndex].clone() : new BitVec(STRIDE_MOV);
 		}
 	}
 
@@ -12950,6 +12963,12 @@ function applyBorderResize(direction, amount) {
 	}
 	pruneObjectsOutsideBoardBounds(curLevel);
 	RebuildLevelArrays();
+	curLevel.movements = newMovements;
+	for (let i = 0; i < curLevel.n_tiles; i++) {
+		curLevel.rigidMovementAppliedMask[i] = newRigidApplied[i] || new BitVec(STRIDE_MOV);
+		curLevel.rigidGroupIndexMask[i] = newRigidGroups[i] || new BitVec(STRIDE_MOV);
+	}
+	calculateRowColMasks();
 	return true;
 }
 
@@ -12991,12 +13010,13 @@ function applyQueuedBorderCommands(commandQueue, dryRun = false) {
 	return changed;
 }
 
-Rule.prototype.queueCommands = function() {
+Rule.prototype.queueCommands = function(repeatCount = 1) {
 	var commands = this.commands;
 	perfCounters.commands += commands.length;	
 	if (commands.length==0){
 		return;
 	}
+	const borderRepeatCount = Math.max(1, Math.floor(repeatCount) || 1);
 
 	//commandQueue is an array of strings, message.commands is an array of array of strings (For messagetext parameter), so I search through them differently
 	var preexisting_cancel=curLevel.commandQueue.indexOf("cancel")>=0;
@@ -13048,7 +13068,20 @@ Rule.prototype.queueCommands = function() {
 			if (!border) {
 				continue;
 			}
-			queuedCommand = `border,${border.direction},${border.amount}`;
+			let resizeCount = 0;
+			for (let rep = 0; rep < borderRepeatCount; rep++) {
+				if (applyBorderResize(border.direction, border.amount)) {
+					resizeCount++;
+				}
+			}
+			if (verbose_logging) {
+				const inspect_ID = addToDebugTimeline(curLevel, this.lineNumber);
+				const result = resizeCount > 0 ? `applied x${resizeCount}` : "ignored";
+				const logString = htmlColor('green',
+					`Rule ${htmlJump(this.lineNumber)} triggers command border ${border.direction} ${border.amount} (${result}, immediate).`);
+				consolePrint(logString, false, this.lineNumber, inspect_ID);
+			}
+			continue;
 		} else if (curLevel.commandQueue.indexOf(command[0])>=0) {
 			continue;
 		}
@@ -13780,13 +13813,6 @@ function procInp(dir,dontDoWin,dontModify,bak,coord) {
 			return true;
 		}
 
-		const borderChanged = applyQueuedBorderCommands(curLevel.commandQueue, dontModify);
-		if (dontModify && borderChanged) {
-			if (verbose_logging) {
-				consoleCacheDump();
-			}
-			return true;
-		}
 		const outOfBoundsPruned = pruneObjectsOutsideBoardBounds(curLevel);
 		if (dontModify && outOfBoundsPruned) {
 			if (verbose_logging) {
@@ -13802,13 +13828,15 @@ function procInp(dir,dontDoWin,dontModify,bak,coord) {
 				consolePrintFromRule('NOSAVE command executed, not storing current state to undo queue.',r);
 			}
 			save_backup = false;
-		}
+	    }
 	    
         var modified=false;
-		var changed = borderChanged ||
-			outOfBoundsPruned ||
+		const boardSizeChanged =
 			(curLevel.width!==bak.width) ||
-			(curLevel.height!==bak.height) ||
+			(curLevel.height!==bak.height);
+		var changed = 
+			outOfBoundsPruned ||
+			boardSizeChanged ||
 			(curLevel.objects.length!==bak.dat.length);
 
 		if (!changed) {
@@ -13965,7 +13993,7 @@ function procInp(dir,dontDoWin,dontModify,bak,coord) {
 	    curLevel.commandQueue=[];
 	    curLevel.commandQueueSourceRules=[];
 		if (debugSwitch.includes('anim')) console.log(`Animate: ${JSON.stringify(seedsToAnimate)}`);
-		if (!dontModify && borderChanged) {
+		if (!dontModify && boardSizeChanged) {
 			canvasResize();
 		}
 
