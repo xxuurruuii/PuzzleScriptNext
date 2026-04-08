@@ -147,6 +147,185 @@ function removeBottomRow(){
 	}
 }
 
+function getEditorBoardLayoutSafe() {
+	if (typeof getEditorBoardLayout === 'function') {
+		return getEditorBoardLayout(curLevel);
+	}
+	return null;
+}
+
+function getEditorBoardCellTarget(mx, my) {
+	const layout = getEditorBoardLayoutSafe();
+	if (!layout) {
+		if (mx >= 0 && my >= 0 && mx < screenwidth - 2 && my < screenheight - 2 - editorRowCount) {
+			return {
+				kind: 'main',
+				levelX: mx,
+				levelY: my
+			};
+		}
+		return null;
+	}
+
+	const boards = [layout.main, layout.extra].filter(Boolean);
+	for (const board of boards) {
+		if (mx >= board.x0 && mx <= board.x1 && my >= board.y0 && my <= board.y1) {
+			return {
+				kind: board.kind,
+				levelX: mx - board.x0,
+				levelY: my - board.y0
+			};
+		}
+	}
+	return null;
+}
+
+function getEditorResizeTarget(mx, my) {
+	const layout = getEditorBoardLayoutSafe();
+	if (!layout) {
+		if (mx === -1) return { kind: 'main', direction: 'left' };
+		if (mx === screenwidth - 2) return { kind: 'main', direction: 'right' };
+		if (my === -1) return { kind: 'main', direction: 'up' };
+		if (my === screenheight - 2 - editorRowCount) return { kind: 'main', direction: 'down' };
+		return null;
+	}
+
+	const boards = [layout.main, layout.extra].filter(Boolean);
+	for (const board of boards) {
+		const onLeft = (mx === board.leftHandle) && (my >= board.topHandle && my <= board.bottomHandle);
+		if (onLeft) return { kind: board.kind, direction: 'left' };
+		const onRight = (mx === board.rightHandle) && (my >= board.topHandle && my <= board.bottomHandle);
+		if (onRight) return { kind: board.kind, direction: 'right' };
+		const onTop = (my === board.topHandle) && (mx >= board.leftHandle && mx <= board.rightHandle);
+		if (onTop) return { kind: board.kind, direction: 'up' };
+		const onBottom = (my === board.bottomHandle) && (mx >= board.leftHandle && mx <= board.rightHandle);
+		if (onBottom) return { kind: board.kind, direction: 'down' };
+	}
+
+	return null;
+}
+
+function applyExtraBoardResizeEditor(direction, amount) {
+	if (!state || !state.extraBoardEnabled || !curLevel) {
+		return false;
+	}
+	if (typeof getExtraBoardBounds !== 'function' || typeof getMainBoardBounds !== 'function'
+		|| typeof snapshotExtraBoard !== 'function' || typeof captureMainBoardState !== 'function'
+		|| typeof normalizeBorderAmount !== 'function') {
+		return false;
+	}
+
+	const mainBounds = getMainBoardBounds(curLevel);
+	const extraBounds = getExtraBoardBounds(curLevel);
+	if (!mainBounds || !extraBounds) {
+		return false;
+	}
+
+	const effectiveAmount = normalizeBorderAmount(direction, amount, extraBounds.width, extraBounds.height);
+	if (effectiveAmount === 0) {
+		return false;
+	}
+
+	const newExtraWidth = extraBounds.width + ((direction === 'left' || direction === 'right') ? effectiveAmount : 0);
+	const newExtraHeight = extraBounds.height + ((direction === 'up' || direction === 'down') ? effectiveAmount : 0);
+	if (newExtraWidth <= 0 || newExtraHeight <= 0) {
+		return false;
+	}
+
+	const newWidth = Math.max(mainBounds.width, newExtraWidth);
+	const newHeight = Math.max(mainBounds.height, newExtraHeight);
+	const mainSnapshot = captureMainBoardState(curLevel);
+	const oldExtra = snapshotExtraBoard(curLevel);
+	if (!mainSnapshot) {
+		return false;
+	}
+
+	const extraBgMask = new BitVec(STRIDE_OBJ);
+	if (state.extraBackgroundid !== undefined) {
+		extraBgMask.ibitset(state.extraBackgroundid);
+	}
+	const newExtraData = new Int32Array(newExtraWidth * newExtraHeight * STRIDE_OBJ);
+	for (let i = 0; i < newExtraWidth * newExtraHeight; i++) {
+		for (let w = 0; w < STRIDE_OBJ; w++) {
+			newExtraData[i * STRIDE_OBJ + w] = extraBgMask.data[w];
+		}
+	}
+
+	const xShift = (direction === 'left') ? effectiveAmount : 0;
+	const yShift = (direction === 'up') ? effectiveAmount : 0;
+	if (oldExtra) {
+		for (let x = 0; x < oldExtra.width; x++) {
+			for (let y = 0; y < oldExtra.height; y++) {
+				const nx = x + xShift;
+				const ny = y + yShift;
+				if (nx < 0 || ny < 0 || nx >= newExtraWidth || ny >= newExtraHeight) {
+					continue;
+				}
+				const srcIndex = (y + x * oldExtra.height) * STRIDE_OBJ;
+				const dstIndex = (ny + nx * newExtraHeight) * STRIDE_OBJ;
+				for (let w = 0; w < STRIDE_OBJ; w++) {
+					newExtraData[dstIndex + w] = oldExtra.data[srcIndex + w];
+				}
+			}
+		}
+	}
+
+	const mainBgMask = new BitVec(STRIDE_OBJ);
+	mainBgMask.ibitset(state.backgroundid);
+	const newObjects = new Int32Array(newWidth * newHeight * STRIDE_OBJ);
+	for (let i = 0; i < newWidth * newHeight; i++) {
+		for (let w = 0; w < STRIDE_OBJ; w++) {
+			newObjects[i * STRIDE_OBJ + w] = mainBgMask.data[w];
+		}
+	}
+
+	for (let x = 0; x < mainSnapshot.width; x++) {
+		for (let y = 0; y < mainSnapshot.height; y++) {
+			const srcIndex = (y + x * mainSnapshot.height) * STRIDE_OBJ;
+			const dstIndex = (y + x * newHeight) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newObjects[dstIndex + w] = mainSnapshot.data[srcIndex + w] | 0;
+			}
+		}
+	}
+
+	for (let x = 0; x < newExtraWidth; x++) {
+		for (let y = 0; y < newExtraHeight; y++) {
+			const srcIndex = (y + x * newExtraHeight) * STRIDE_OBJ;
+			const dstIndex = (y + x * newHeight) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newObjects[dstIndex + w] |= newExtraData[srcIndex + w];
+			}
+		}
+	}
+
+	curLevel.width = newWidth;
+	curLevel.height = newHeight;
+	curLevel.n_tiles = newWidth * newHeight;
+	curLevel.objects = newObjects;
+	curLevel.mainBoardWidth = mainBounds.width;
+	curLevel.mainBoardHeight = mainBounds.height;
+	curLevel.extraBoardWidth = newExtraWidth;
+	curLevel.extraBoardHeight = newExtraHeight;
+
+	if (typeof pruneObjectsOutsideBoardBounds === 'function') {
+		pruneObjectsOutsideBoardBounds(curLevel);
+	}
+	RebuildLevelArrays();
+	calculateRowColMasks();
+	return true;
+}
+
+function resizeEditorBoard(kind, direction, amount) {
+	if (kind === 'extra') {
+		return applyExtraBoardResizeEditor(direction, amount);
+	}
+	if (typeof applyBorderResize === 'function') {
+		return applyBorderResize(direction, amount);
+	}
+	return false;
+}
+
 function matchGlyph(inputmask,glyphAndMask) {
 	// find mask with closest match
 	var highestbitcount=-1;
@@ -199,6 +378,23 @@ function printLevel() {
 	var backgroundGlyph = '.';
 	var warnedApprox = false;
 	var warnedNoBackgroundGlyph = false;
+	var extraBoardEnabled = !!(state && state.extraBoardEnabled);
+	var baseIdByExtraId = (state && state.baseIdByExtraId) ? state.baseIdByExtraId : null;
+	var extraMask = null;
+	if (extraBoardEnabled && state.extraIdByBaseId) {
+		extraMask = new BitVec(STRIDE_OBJ);
+		for (var baseIdText in state.extraIdByBaseId) {
+			if (!state.extraIdByBaseId.hasOwnProperty(baseIdText))
+				continue;
+			var eid = state.extraIdByBaseId[baseIdText];
+			if (eid !== undefined) {
+				extraMask.ibitset(eid);
+			}
+		}
+		if (extraMask.iszero()) {
+			extraMask = null;
+		}
+	}
 
 	function bitVecKey(vec) {
 		return Array.from(vec.data).join(',');
@@ -300,6 +496,86 @@ function printLevel() {
 		return parts;
 	}
 
+	function clampDim(value, fallback, max) {
+		var v = isFinite(value) ? Math.floor(value) : fallback;
+		if (!isFinite(v) || isNaN(v)) {
+			v = fallback;
+		}
+		if (v < 1) {
+			v = 1;
+		}
+		if (v > max) {
+			v = max;
+		}
+		return v;
+	}
+
+	function getMainExportBounds() {
+		if (!extraBoardEnabled) {
+			return { width: curLevel.width, height: curLevel.height };
+		}
+		return {
+			width: clampDim(curLevel.mainBoardWidth, curLevel.width, curLevel.width),
+			height: clampDim(curLevel.mainBoardHeight, curLevel.height, curLevel.height)
+		};
+	}
+
+	function getExtraExportBounds() {
+		if (!extraBoardEnabled) {
+			return null;
+		}
+		return {
+			width: clampDim(curLevel.extraBoardWidth, 1, curLevel.width),
+			height: clampDim(curLevel.extraBoardHeight, 1, curLevel.height)
+		};
+	}
+
+	function getExportCellMask(x, y, boardKind) {
+		var idx = y + x * curLevel.height;
+		var source = curLevel.getCell(idx).clone();
+		if (!extraBoardEnabled) {
+			return source;
+		}
+
+		if (boardKind === 'main') {
+			if (extraMask) {
+				source.iclear(extraMask);
+			}
+			return source;
+		}
+
+		var mapped = new BitVec(STRIDE_OBJ);
+		for (var objId = 0; objId < state.objectCount; objId++) {
+			if (!source.get(objId)) {
+				continue;
+			}
+			if (baseIdByExtraId && baseIdByExtraId[objId] !== undefined) {
+				mapped.ibitset(baseIdByExtraId[objId]);
+			}
+		}
+		return mapped;
+	}
+
+	function computeBoardLayers(width, height, boardKind) {
+		var perCellLayers = [];
+		var maxLayerCount = 1;
+		for (var y = 0; y < height; y++) {
+			for (var x = 0; x < width; x++) {
+				var cellIndex = y + x * height;
+				var cellMask = getExportCellMask(x, y, boardKind);
+				var parts = decomposeCell(cellMask);
+				perCellLayers[cellIndex] = parts;
+				if (parts.length > maxLayerCount) {
+					maxLayerCount = parts.length;
+				}
+			}
+		}
+		return {
+			perCellLayers: perCellLayers,
+			maxLayerCount: maxLayerCount
+		};
+	}
+
 	for (var glyphName in state.glyphDict) {
 		if (state.glyphDict.hasOwnProperty(glyphName)&&glyphName.length===1) {
 			var glyph = state.glyphDict[glyphName];
@@ -345,41 +621,50 @@ function printLevel() {
 		}
 	}
 
-	var perCellLayers = [];
-	var maxLayerCount = 1;
-	for (var y = 0; y < curLevel.height; y++) {
-		for (var x = 0; x < curLevel.width; x++) {
-			var cellIndex = y + x * curLevel.height;
-			var cellMask = curLevel.getCell(cellIndex);
-			var parts = decomposeCell(cellMask);
-			perCellLayers[cellIndex] = parts;
-			if (parts.length > maxLayerCount)
-				maxLayerCount = parts.length;
-		}
-	}
-
 	selectableint++;
 	var tag = 'selectable'+selectableint;
 	var output="Printing level contents:<br><br><span id=\""+tag+"\" onclick=\"selectText('"+tag+"',event)\"><br>";
 	cache_console_messages = false;
-	for (var layerIndex = 0; layerIndex < maxLayerCount; layerIndex++) {
-		for (var j=0;j<curLevel.height;j++) {
-			for (var i=0;i<curLevel.width;i++) {
-				var cIndex = j + i * curLevel.height;
-				var glyph = perCellLayers[cIndex][layerIndex] || backgroundGlyph;
-				if (glyph in htmlEntityMap) {
-					glyph = htmlEntityMap[glyph]; 
-				}
-				output = output + glyph;
-			}
-			if (j < curLevel.height - 1 || layerIndex < maxLayerCount - 1) {
-				output = output + "<br>";
-			}
+
+	var firstLine = true;
+	function appendLine(line) {
+		if (!firstLine) {
+			output += "<br>";
 		}
-		if (layerIndex < maxLayerCount - 1) {
-			output = output + "layer<br>";
+		output += line;
+		firstLine = false;
+	}
+
+	function appendBoard(boardKind, bounds) {
+		var board = computeBoardLayers(bounds.width, bounds.height, boardKind);
+		for (var layerIndex = 0; layerIndex < board.maxLayerCount; layerIndex++) {
+			for (var y = 0; y < bounds.height; y++) {
+				var row = "";
+				for (var x = 0; x < bounds.width; x++) {
+					var cIndex = y + x * bounds.height;
+					var glyph = board.perCellLayers[cIndex][layerIndex] || backgroundGlyph;
+					if (glyph in htmlEntityMap) {
+						glyph = htmlEntityMap[glyph];
+					}
+					row += glyph;
+				}
+				appendLine(row);
+			}
+			if (layerIndex < board.maxLayerCount - 1) {
+				appendLine("layer");
+			}
 		}
 	}
+
+	var mainBounds = getMainExportBounds();
+	appendBoard('main', mainBounds);
+
+	var extraBounds = getExtraExportBounds();
+	if (extraBounds) {
+		appendLine("extra");
+		appendBoard('extra', extraBounds);
+	}
+
 	output+="</span><br><br>"
 	consolePrint(output,true);
 }
@@ -399,25 +684,40 @@ function levelEditorClick(event,click) {
 			redraw();
 		}
 
-	} else if (mouseCoordX>-1&&mouseCoordY>-1&&mouseCoordX<screenwidth-2&&mouseCoordY<screenheight-2-editorRowCount	) {
+	} else {
+		const target = getEditorBoardCellTarget(mouseCoordX, mouseCoordY);
+		if (target) {
 		var glyphname = glyphImagesCorrespondance[glyphSelectedIndex];
 		var glyph = state.glyphDict[glyphname];
-		var backgroundMask = state.layerMasks[state.backgroundlayer];
-
-		var coordIndex = mouseCoordY + mouseCoordX*curLevel.height;
+		let backgroundMask = state.layerMasks[state.backgroundlayer];
+		let backgroundId = state.backgroundid;
+		var coordIndex = target.levelY + target.levelX*curLevel.height;
 		var oldCell = curLevel.getCell(coordIndex);
 		var newCell = oldCell.clone();
 		for (var layerIndex = 0; layerIndex < glyph.length; layerIndex++) {
 			var id = glyph[layerIndex];
 			if (id >= 0) {
-				newCell.iclear(state.layerMasks[layerIndex]);
-				newCell.ibitset(id);
+				var targetId = id;
+				if (target.kind === 'extra' && state.extraIdByBaseId && state.extraIdByBaseId[id] !== undefined) {
+					targetId = state.extraIdByBaseId[id];
+				}
+				var targetName = state.idDict[targetId];
+				if (!targetName || !state.objects[targetName]) {
+					continue;
+				}
+				var targetLayer = state.objects[targetName].layer;
+				newCell.iclear(state.layerMasks[targetLayer]);
+				newCell.ibitset(targetId);
 			}
+		}
+		if (target.kind === 'extra' && state.extraBackgroundlayer !== undefined && state.extraBackgroundid !== undefined) {
+			backgroundMask = state.layerMasks[state.extraBackgroundlayer];
+			backgroundId = state.extraBackgroundid;
 		}
 		if (newCell.bitsClearInArray(backgroundMask.data)) {
 			// If we don't already have a background layer, mix in
 			// the default one.
-			newCell.ibitset(state.backgroundid);
+			newCell.ibitset(backgroundId);
 		}
 
 		if (oldCell.equals(newCell)) {
@@ -430,23 +730,12 @@ function levelEditorClick(event,click) {
 			curLevel.setCell(coordIndex, newCell);
 			redraw();
 		}
-	}
-	else if (click) {
-		if (mouseCoordX===-1) {
-			//add a left row to the map
-			addLeftColumn();			
-			canvasResize();
-		} else if (mouseCoordX===screenwidth-2) {
-			addRightColumn();
-			canvasResize();
-		} 
-		if (mouseCoordY===-1) {
-			addTopRow();
-			canvasResize();
-		} else if (mouseCoordY===screenheight-2-editorRowCount) {
-			addBottomRow();
+	} else if (click) {
+		const resizeTarget = getEditorResizeTarget(mouseCoordX, mouseCoordY);
+		if (resizeTarget && resizeEditorBoard(resizeTarget.kind, resizeTarget.direction, 1)) {
 			canvasResize();
 		}
+	}
 	}
 }
 
@@ -460,28 +749,35 @@ function levelEditorRightClick(event,click) {
 			glyphSelectedIndex=glyphIndex;
 			redraw();
 		}
-	} else if (mouseCoordX>-1&&mouseCoordY>-1&&mouseCoordX<screenwidth-2&&mouseCoordY<screenheight-2-editorRowCount	) {
-		var coordIndex = mouseCoordY + mouseCoordX*curLevel.height;
-		var glyphmask = new BitVec(STRIDE_OBJ);
-		glyphmask.ibitset(state.backgroundid);
-		curLevel.setCell(coordIndex, glyphmask);
-		redraw();
-	}
-	else if (click) {
-		if (mouseCoordX===-1) {
-			//add a left row to the map
-			removeLeftColumn();			
-			canvasResize();
-		} else if (mouseCoordX===screenwidth-2) {
-			removeRightColumn();
-			canvasResize();
-		} 
-		if (mouseCoordY===-1) {
-			removeTopRow();
-			canvasResize();
-		} else if (mouseCoordY===screenheight-2-editorRowCount) {
-			removeBottomRow();
-			canvasResize();
+	} else {
+		const target = getEditorBoardCellTarget(mouseCoordX, mouseCoordY);
+		if (target) {
+			var coordIndex = target.levelY + target.levelX*curLevel.height;
+			var oldCell = curLevel.getCell(coordIndex);
+			var newCell = oldCell.clone();
+			if (target.kind === 'extra' && state.extraBaseLayerCount !== undefined) {
+				for (var layer = state.extraBaseLayerCount; layer < state.layerMasks.length; layer++) {
+					newCell.iclear(state.layerMasks[layer]);
+				}
+				if (state.extraBackgroundid !== undefined) {
+					newCell.ibitset(state.extraBackgroundid);
+				}
+			} else {
+				var mainLayerLimit = state.extraBoardEnabled && state.extraBaseLayerCount !== undefined
+					? state.extraBaseLayerCount
+					: state.layerMasks.length;
+				for (var layer = 0; layer < mainLayerLimit; layer++) {
+					newCell.iclear(state.layerMasks[layer]);
+				}
+				newCell.ibitset(state.backgroundid);
+			}
+			curLevel.setCell(coordIndex, newCell);
+			redraw();
+		} else if (click) {
+			const resizeTarget = getEditorResizeTarget(mouseCoordX, mouseCoordY);
+			if (resizeTarget && resizeEditorBoard(resizeTarget.kind, resizeTarget.direction, -1)) {
+				canvasResize();
+			}
 		}
 	}
 }

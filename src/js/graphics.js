@@ -434,12 +434,61 @@ function glyphCount() {
 }
 
 function shouldShowExtraDebugBoard() {
-    return !!state
-        && !!state.metadata
-        && !!state.extraBoardEnabled
-        && !!state.metadata.extra_debug
-        && !textMode
-        && !levelEditorOpened;
+    if (!state || !state.metadata || !state.extraBoardEnabled || textMode) {
+        return false;
+    }
+    if (levelEditorOpened) {
+        // In editor mode, always show the extra board when EXTRA_BOARD is enabled.
+        return true;
+    }
+    return !!state.metadata.extra_debug;
+}
+
+function getExtraBoardGapColumns() {
+    return levelEditorOpened ? 2 : 1;
+}
+
+function getExtraBoardShiftColumns(level = curLevel) {
+    const mainBoardSize = getMainBoardSize(level);
+    return mainBoardSize.width + getExtraBoardGapColumns();
+}
+
+function getEditorBoardLayout(level = curLevel) {
+    if (!levelEditorOpened || textMode || !level) {
+        return null;
+    }
+
+    const mainSize = getMainBoardSize(level);
+    const main = {
+        kind: 'main',
+        x0: 0,
+        y0: 0,
+        x1: Math.max(0, mainSize.width - 1),
+        y1: Math.max(0, mainSize.height - 1),
+        leftHandle: -1,
+        rightHandle: mainSize.width,
+        topHandle: -1,
+        bottomHandle: mainSize.height
+    };
+
+    let extra = null;
+    const extraSize = getExtraDebugBoardSize(level);
+    if (extraSize) {
+        const startX = getExtraBoardShiftColumns(level);
+        extra = {
+            kind: 'extra',
+            x0: startX,
+            y0: 0,
+            x1: startX + Math.max(0, extraSize.width - 1),
+            y1: Math.max(0, extraSize.height - 1),
+            leftHandle: startX - 1,
+            rightHandle: startX + extraSize.width,
+            topHandle: -1,
+            bottomHandle: extraSize.height
+        };
+    }
+
+    return { main, extra };
 }
 
 function getExtraDebugBoardSize(level = curLevel) {
@@ -552,8 +601,8 @@ function redrawCellGrid(curlevel) {
     };
 
     if (levelEditorOpened) {
-        minMaxIJ[2] -= 2;
-        minMaxIJ[3] -= 2 + editorRowCount;
+        const mainSize = getMainBoardSize(curlevel);
+        minMaxIJ = [0, 0, mainSize.width, mainSize.height];
     } else if (flickscreen) {
         var playerPositions = getPlayerPositions();
         if (playerPositions.length>0) {
@@ -693,7 +742,9 @@ function redrawCellGrid(curlevel) {
     const render = new RenderOrder(minMaxIJ);
     const extraDebugVisible = shouldShowExtraDebugBoard();
     const extraDebugSize = extraDebugVisible ? getExtraDebugBoardSize(curlevel) : null;
-    const layoutBoardHeight = (extraDebugVisible && extraDebugSize) ? Math.max(screenheight, extraDebugSize.height) : screenheight;
+    const layoutBoardHeight = (extraDebugVisible && extraDebugSize && !levelEditorOpened)
+        ? Math.max(screenheight, extraDebugSize.height)
+        : screenheight;
     if (!levelEditorOpened && !showLayers && !extraDebugVisible)
     //if (!levelEditorOpened)
         setClip(render);
@@ -821,7 +872,7 @@ function redrawCellGrid(curlevel) {
         if (!extraBoardSize) {
             return;
         }
-        const boardShiftPixels = (screenwidth + 1) * cellwidth;
+        const boardShiftPixels = getExtraBoardShiftColumns(curlevel) * cellwidth;
 
         for (const group of state.collisionLayerGroups) {
             for (let x = 0; x < extraBoardSize.width; x++) {
@@ -1106,6 +1157,41 @@ function drawEditorIcons(mini,minj) {
 
 	var ypos = editorRowCount-(-mouseCoordY-2)-1;
 	var mouseIndex=(toolbarMouseCol-1)+toolbarSlotsPerRow*ypos;
+    const boardLayout = getEditorBoardLayout(curLevel);
+
+    function getBoardCellFromMouse(mx, my) {
+        if (!boardLayout) {
+            return null;
+        }
+        const boards = [boardLayout.main, boardLayout.extra].filter(Boolean);
+        for (const board of boards) {
+            if (mx >= board.x0 && mx <= board.x1 && my >= board.y0 && my <= board.y1) {
+                return {
+                    board: board,
+                    levelX: mx - board.x0,
+                    levelY: my - board.y0
+                };
+            }
+        }
+        return null;
+    }
+
+    function isOnBoardResizeHandle(mx, my) {
+        if (!boardLayout) {
+            return false;
+        }
+        const boards = [boardLayout.main, boardLayout.extra].filter(Boolean);
+        for (const board of boards) {
+            const onLeft = (mx === board.leftHandle) && (my >= board.topHandle && my <= board.bottomHandle);
+            const onRight = (mx === board.rightHandle) && (my >= board.topHandle && my <= board.bottomHandle);
+            const onTop = (my === board.topHandle) && (mx >= board.leftHandle && mx <= board.rightHandle);
+            const onBottom = (my === board.bottomHandle) && (mx >= board.leftHandle && mx <= board.rightHandle);
+            if (onLeft || onRight || onTop || onBottom) {
+                return true;
+            }
+        }
+        return false;
+    }
 
 	for (var i=0;i<glyphsToDisplay;i++) {
 		var glyphIndex = glyphStartIndex+i;
@@ -1139,14 +1225,19 @@ function drawEditorIcons(mini,minj) {
         }
     }
     // prepare tooltip: content of a level's cell
-    else if ( (mouseCoordX >= 0) && (mouseCoordY >= 0) && (mouseCoordX < screenwidth) && (mouseCoordY < screenheight-editorRowCount-2) )
-    {
-        const posMask = curLevel.getCellInto((mouseCoordY+minj) + (mouseCoordX+mini)*curLevel.height, _o12);
-        tooltip_objects = state.idDict.filter( (x,k) => (posMask.get(k) != 0) )
-            // prepare tooltip: object names
-        if (tooltip_objects !== null)
-        {
-            tooltip_string = tooltip_objects.join(', ')
+    else {
+        const boardCell = getBoardCellFromMouse(mouseCoordX, mouseCoordY);
+        if (boardCell) {
+            const posMask = curLevel.getCellInto((boardCell.levelY + minj) + (boardCell.levelX + mini) * curLevel.height, _o12);
+            tooltip_objects = state.idDict.filter((x, k) => (posMask.get(k) != 0));
+            if (boardCell.board.kind === 'extra') {
+                tooltip_objects = tooltip_objects.map(name =>
+                    name.startsWith("__extra__") ? name.substring("__extra__".length) : name
+                );
+            }
+            if (tooltip_objects !== null) {
+                tooltip_string = tooltip_objects.join(', ');
+            }
         }
     }
 
@@ -1160,19 +1251,21 @@ function drawEditorIcons(mini,minj) {
 		ctx.fillText(tooltip_string, canvas.width/2, toolbarTopY + editorRowCount*cellheight + 0.5*cellheight);//, screenwidth * cellwidth);
     }
 
-	if (mouseCoordX>=-1&&mouseCoordY>=-1&&mouseCoordX<screenwidth-1&&mouseCoordY<screenheight-1-editorRowCount) {
-		if (mouseCoordX==-1||mouseCoordY==-1||mouseCoordX==screenwidth-2||mouseCoordY===screenheight-2-editorRowCount) {
-			ctx.drawImage(glyphHighlightResize,
-				xoffset+mouseCoordX*cellwidth,
-				yoffset+mouseCoordY*cellheight
-				);								
-		} else {
-			ctx.drawImage(glyphHighlight,
-				xoffset+mouseCoordX*cellwidth,
-				yoffset+mouseCoordY*cellheight
-				);				
-		}
-	}
+    const boardCell = getBoardCellFromMouse(mouseCoordX, mouseCoordY);
+    const onResizeHandle = isOnBoardResizeHandle(mouseCoordX, mouseCoordY);
+    if (boardCell || onResizeHandle) {
+        if (onResizeHandle) {
+            ctx.drawImage(glyphHighlightResize,
+                xoffset + mouseCoordX * cellwidth,
+                yoffset + mouseCoordY * cellheight
+            );
+        } else {
+            ctx.drawImage(glyphHighlight,
+                xoffset + mouseCoordX * cellwidth,
+                yoffset + mouseCoordY * cellheight
+            );
+        }
+    }
 
 }
 
@@ -1198,6 +1291,7 @@ function canvasResize(level) {
     screenwidth = mainBoardSize.width;        // board size, used to calculate cell size
     screenheight = mainBoardSize.height;
     if (!state) throw 'oops!';
+    let editorBoardHeight = mainBoardSize.height;
 
     flickscreen=state.metadata.flickscreen!==undefined;
     zoomscreen=state.metadata.zoomscreen!==undefined;
@@ -1206,10 +1300,18 @@ function canvasResize(level) {
         screenwidth = TITLE_WIDTH;
         screenheight = TITLE_HEIGHT;
     } else if (levelEditorOpened) {
-        screenwidth += 2;
+        const extraEditorVisible = shouldShowExtraDebugBoard();
+        const extraEditorSize = extraEditorVisible ? getExtraDebugBoardSize(level) : null;
+        const extraEditorWidth = extraEditorSize ? extraEditorSize.width : 0;
+        const extraEditorHeight = extraEditorSize ? extraEditorSize.height : 0;
+        editorBoardHeight = extraEditorVisible
+            ? Math.max(mainBoardSize.height, extraEditorHeight)
+            : mainBoardSize.height;
+        // editor width includes both boards (if any), plus one resize border around each board.
+        screenwidth = mainBoardSize.width + 2 + (extraEditorVisible ? (extraEditorWidth + 2) : 0);
         const glyphcount = glyphCount();
-        editorRowCount = Math.ceil(glyphcount/(screenwidth-1));
-        screenheight += 2 + editorRowCount;
+        editorRowCount = Math.ceil(glyphcount / Math.max(1, (screenwidth - 1)));
+        screenheight = editorBoardHeight + 2 + editorRowCount;
     } else if (flickscreen) {
         screenwidth=state.metadata.flickscreen[0];
         screenheight=state.metadata.flickscreen[1];
@@ -1227,8 +1329,12 @@ function canvasResize(level) {
     const extraBoardSize = getExtraDebugBoardSize(level);
     const extraVisibleWidth = (extraDebugVisible && extraBoardSize) ? extraBoardSize.width : 0;
     const extraVisibleHeight = (extraDebugVisible && extraBoardSize) ? extraBoardSize.height : 0;
-    const layoutScreenWidth = extraDebugVisible ? (screenwidth + 1 + extraVisibleWidth) : screenwidth;
-    const layoutScreenHeight = extraDebugVisible ? Math.max(screenheight, extraVisibleHeight) : screenheight;
+    const layoutScreenWidth = (!levelEditorOpened && extraDebugVisible)
+        ? (screenwidth + getExtraBoardGapColumns() + extraVisibleWidth)
+        : screenwidth;
+    const layoutScreenHeight = (!levelEditorOpened && extraDebugVisible)
+        ? Math.max(screenheight, extraVisibleHeight)
+        : screenheight;
 
     function recalcCellMetrics() {
         cellwidth = canvas.width / layoutScreenWidth;
@@ -1266,7 +1372,7 @@ function canvasResize(level) {
             if (nextEditorRows === editorRowCount)
                 break;
             editorRowCount = nextEditorRows;
-            screenheight = level.height + 2 + editorRowCount;
+            screenheight = editorBoardHeight + 2 + editorRowCount;
             recalcCellMetrics();
         }
     }
