@@ -3146,7 +3146,7 @@ Rule.prototype.tryApply = function(level) {
 	let commandRepeatCount = 1;
 	let commandTuples = null;
 	const hasMatchScopedCommands = this.commands && this.commands.some(cmd =>
-		cmd && (cmd[0] === 'border' || cmd[0] === 'savestate' || cmd[0] === 'loadstate'));
+		cmd && (cmd[0] === 'border' || cmd[0] === 'extraborder' || cmd[0] === 'savestate' || cmd[0] === 'loadstate'));
 
     var result=false;	
 	if (this.hasReplacements) {
@@ -3734,6 +3734,128 @@ function applyBorderResize(direction, amount) {
 	return true;
 }
 
+function applyExtraBorderResize(direction, amount) {
+	if (!state || !state.extraBoardEnabled) {
+		return false;
+	}
+
+	const mainBounds = getMainBoardBounds(curLevel);
+	const extraBounds = getExtraBoardBounds(curLevel);
+	if (!mainBounds || !extraBounds) {
+		return false;
+	}
+
+	const oldExtraWidth = extraBounds.width;
+	const oldExtraHeight = extraBounds.height;
+	const effectiveAmount = normalizeBorderAmount(direction, amount, oldExtraWidth, oldExtraHeight);
+	if (effectiveAmount === 0) {
+		return false;
+	}
+
+	const newExtraWidth = oldExtraWidth + ((direction === 'left' || direction === 'right') ? effectiveAmount : 0);
+	const newExtraHeight = oldExtraHeight + ((direction === 'up' || direction === 'down') ? effectiveAmount : 0);
+	if (newExtraWidth <= 0 || newExtraHeight <= 0) {
+		return false;
+	}
+
+	const newWidth = Math.max(mainBounds.width, newExtraWidth);
+	const newHeight = Math.max(mainBounds.height, newExtraHeight);
+	if (newWidth <= 0 || newHeight <= 0) {
+		return false;
+	}
+
+	const mainSnapshot = captureMainBoardState(curLevel);
+	if (!mainSnapshot) {
+		return false;
+	}
+
+	let oldExtra = snapshotExtraBoard(curLevel);
+	if (!oldExtra) {
+		oldExtra = {
+			width: oldExtraWidth,
+			height: oldExtraHeight,
+			data: new Int32Array(oldExtraWidth * oldExtraHeight * STRIDE_OBJ)
+		};
+	}
+
+	const extraBgMask = new BitVec(STRIDE_OBJ);
+	if (state.extraBackgroundid !== undefined) {
+		extraBgMask.ibitset(state.extraBackgroundid);
+	}
+	const newExtraData = new Int32Array(newExtraWidth * newExtraHeight * STRIDE_OBJ);
+	for (let i = 0; i < newExtraWidth * newExtraHeight; i++) {
+		for (let w = 0; w < STRIDE_OBJ; w++) {
+			newExtraData[i * STRIDE_OBJ + w] = extraBgMask.data[w];
+		}
+	}
+
+	let xShift = 0;
+	let yShift = 0;
+	if (direction === 'left') {
+		xShift = effectiveAmount;
+	} else if (direction === 'up') {
+		yShift = effectiveAmount;
+	}
+
+	for (let x = 0; x < oldExtra.width; x++) {
+		for (let y = 0; y < oldExtra.height; y++) {
+			const nx = x + xShift;
+			const ny = y + yShift;
+			if (nx < 0 || ny < 0 || nx >= newExtraWidth || ny >= newExtraHeight) {
+				continue;
+			}
+			const srcIndex = (y + x * oldExtra.height) * STRIDE_OBJ;
+			const dstIndex = (ny + nx * newExtraHeight) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newExtraData[dstIndex + w] = oldExtra.data[srcIndex + w];
+			}
+		}
+	}
+
+	const mainBgMask = new BitVec(STRIDE_OBJ);
+	mainBgMask.ibitset(state.backgroundid);
+	const newObjects = new Int32Array(newWidth * newHeight * STRIDE_OBJ);
+	for (let i = 0; i < newWidth * newHeight; i++) {
+		for (let w = 0; w < STRIDE_OBJ; w++) {
+			newObjects[i * STRIDE_OBJ + w] = mainBgMask.data[w];
+		}
+	}
+
+	for (let x = 0; x < mainSnapshot.width; x++) {
+		for (let y = 0; y < mainSnapshot.height; y++) {
+			const srcIndex = (y + x * mainSnapshot.height) * STRIDE_OBJ;
+			const dstIndex = (y + x * newHeight) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newObjects[dstIndex + w] = mainSnapshot.data[srcIndex + w] | 0;
+			}
+		}
+	}
+
+	for (let x = 0; x < newExtraWidth; x++) {
+		for (let y = 0; y < newExtraHeight; y++) {
+			const srcIndex = (y + x * newExtraHeight) * STRIDE_OBJ;
+			const dstIndex = (y + x * newHeight) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newObjects[dstIndex + w] |= newExtraData[srcIndex + w];
+			}
+		}
+	}
+
+	curLevel.width = newWidth;
+	curLevel.height = newHeight;
+	curLevel.n_tiles = newWidth * newHeight;
+	curLevel.objects = newObjects;
+	curLevel.mainBoardWidth = mainBounds.width;
+	curLevel.mainBoardHeight = mainBounds.height;
+	curLevel.extraBoardWidth = newExtraWidth;
+	curLevel.extraBoardHeight = newExtraHeight;
+
+	pruneObjectsOutsideBoardBounds(curLevel);
+	RebuildLevelArrays();
+	calculateRowColMasks();
+	return true;
+}
+
 function applyQueuedBorderCommands(commandQueue, dryRun = false) {
 	if (!state || !state.metadata || !state.metadata.runtime_border_twiddling) {
 		return false;
@@ -3825,8 +3947,11 @@ Rule.prototype.queueCommands = function(repeatCount = 1, matchedTuples = null) {
 		} else if (command[0] == 'savestate' || command[0] == 'loadstate') {
 			runStateCellCommand(command[0], matchedTuples, this);
 			continue;
-		} else if (command[0] == 'border') {
+		} else if (command[0] == 'border' || command[0] == 'extraborder') {
 			if (!state || !state.metadata || !state.metadata.runtime_border_twiddling) {
+				continue;
+			}
+			if (command[0] === 'extraborder' && (!state.extraBoardEnabled || !state.metadata.extra_board)) {
 				continue;
 			}
 			const border = parseBorderCommand(command[1], this.direction);
@@ -3835,7 +3960,10 @@ Rule.prototype.queueCommands = function(repeatCount = 1, matchedTuples = null) {
 			}
 			let resizeCount = 0;
 			for (let rep = 0; rep < borderRepeatCount; rep++) {
-				if (applyBorderResize(border.direction, border.amount)) {
+				const applied = (command[0] === 'extraborder')
+					? applyExtraBorderResize(border.direction, border.amount)
+					: applyBorderResize(border.direction, border.amount);
+				if (applied) {
 					resizeCount++;
 				}
 			}
@@ -3843,7 +3971,7 @@ Rule.prototype.queueCommands = function(repeatCount = 1, matchedTuples = null) {
 				const inspect_ID = addToDebugTimeline(curLevel, this.lineNumber);
 				const result = resizeCount > 0 ? `applied x${resizeCount}` : "ignored";
 				const logString = htmlColor('green',
-					`Rule ${htmlJump(this.lineNumber)} triggers command border ${border.direction} ${border.amount} (${result}, immediate).`);
+					`Rule ${htmlJump(this.lineNumber)} triggers command ${command[0]} ${border.direction} ${border.amount} (${result}, immediate).`);
 				consolePrint(logString, false, this.lineNumber, inspect_ID);
 			}
 			continue;

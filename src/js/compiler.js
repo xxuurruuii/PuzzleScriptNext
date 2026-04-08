@@ -2025,24 +2025,30 @@ function processRuleString(rule, state, curRules) {
                 if (needarg || twid) {
                     if (twid && !state.metadata.runtime_metadata_twiddling) {
                         logError("You can only change a flag at runtime if you have the 'runtime_metadata_twiddling' prelude flag defined!",lineNumber)
-                    } else if (tok === 'border' && !state.metadata.runtime_border_twiddling) {
-                        logError("You can only use BORDER at runtime if you have the 'runtime_border_twiddling' prelude flag defined!", lineNumber);
+                    } else if ((tok === 'border' || tok === 'extraborder') && !state.metadata.runtime_border_twiddling) {
+                        const name = tok === 'extraborder' ? 'EXTRABORDER' : 'BORDER';
+                        logError(`You can only use ${name} at runtime if you have the 'runtime_border_twiddling' prelude flag defined!`, lineNumber);
+                    } else if (tok === 'extraborder' && !state.metadata.extra_board) {
+                        logError("You can only use EXTRABORDER at runtime if you also enable the 'extra_board' prelude flag.", lineNumber);
                     } else {
                         const index = findIndexAfterToken(origLine,tokens,i);
                         const str = origLine.substring(index).trim();
                         if (twid && str == "")
                             logError('You included a twiddleable option, but did not specify a value. The twiddle may behave strangely. Please use "set", "default", "wipe", or specify the correct value. See the documentation for more info.', lineNumber);
-                        if (tok === 'border') {
+                        if (tok === 'border' || tok === 'extraborder') {
                             const parts = str.split(/[\s,]+/).filter(Boolean);
                             if (parts.length < 2) {
-                                logError('BORDER expects two arguments: direction and amount, for example "border right 2".', lineNumber);
+                                const name = tok === 'extraborder' ? 'EXTRABORDER' : 'BORDER';
+                                logError(`${name} expects two arguments: direction and amount, for example "${tok} right 2".`, lineNumber);
                             } else {
                                 const dir = parts[0].toLowerCase();
                                 if (['right', 'left', 'up', 'down', '<', '>', '^', 'v'].indexOf(dir) < 0) {
-                                    logError(`BORDER direction "${parts[0]}" is invalid. Use right/left/up/down or <>^v.`, lineNumber);
+                                    const name = tok === 'extraborder' ? 'EXTRABORDER' : 'BORDER';
+                                    logError(`${name} direction "${parts[0]}" is invalid. Use right/left/up/down or <>^v.`, lineNumber);
                                 }
                                 if (!/^[-+]?\d+$/.test(parts[1])) {
-                                    logError(`BORDER amount "${parts[1]}" is invalid. Use an integer.`, lineNumber);
+                                    const name = tok === 'extraborder' ? 'EXTRABORDER' : 'BORDER';
+                                    logError(`${name} amount "${parts[1]}" is invalid. Use an integer.`, lineNumber);
                                 }
                             }
                         }
@@ -2181,7 +2187,7 @@ function absolutifyBorderCommands(rule) {
         return;
     }
     for (const cmd of rule.commands) {
-        if (cmd[0] === 'border' && typeof cmd[1] === 'string') {
+        if ((cmd[0] === 'border' || cmd[0] === 'extraborder') && typeof cmd[1] === 'string') {
             cmd[1] = absolutifyBorderCommandArg(rule.direction, cmd[1]);
         }
     }

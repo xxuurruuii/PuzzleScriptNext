@@ -206,6 +206,9 @@ function getEditorResizeTarget(mx, my) {
 }
 
 function applyExtraBoardResizeEditor(direction, amount) {
+	if (typeof applyExtraBorderResize === 'function') {
+		return applyExtraBorderResize(direction, amount);
+	}
 	if (!state || !state.extraBoardEnabled || !curLevel) {
 		return false;
 	}
