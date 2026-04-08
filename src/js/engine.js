@@ -1287,6 +1287,7 @@ function level4Serialization() {
 		mainBoardHeight: curLevel.mainBoardHeight,
 		extraBoardWidth: curLevel.extraBoardWidth,
 		extraBoardHeight: curLevel.extraBoardHeight,
+		extraCellStates: deepClone(curLevel.extraCellStates || {}),
 		oldflickscreendat: oldflickscreendat.concat([]),
     	cameraPositionTarget: Object.assign({}, cameraPositionTarget),
 		levelNo: curLevelNo,
@@ -1561,6 +1562,7 @@ function unconsolidateDiff(before,after) {
 		mainBoardHeight: before.mainBoardHeight,
 		extraBoardWidth: before.extraBoardWidth,
 		extraBoardHeight: before.extraBoardHeight,
+		extraCellStates: deepClone(before.extraCellStates || {}),
 		oldflickscreendat: before.oldflickscreendat
 	}
 }
@@ -1629,6 +1631,7 @@ function restoreLevel(lev, snapCamera, resetTween = true, resetAutoTick = true) 
 		curLevel.extraBoardHeight = Math.max(1, Math.min(curLevel.height, extraHeight));
 		pruneObjectsOutsideBoardBounds(curLevel);
 	}
+	curLevel.extraCellStates = deepClone(lev.extraCellStates || {});
 
     if (lev.cameraPositionTarget) {
       	cameraPositionTarget = Object.assign({}, lev.cameraPositionTarget);
@@ -1726,6 +1729,7 @@ function consolidateDiff(before,after){
 		mainBoardHeight: before.mainBoardHeight,
 		extraBoardWidth: before.extraBoardWidth,
 		extraBoardHeight: before.extraBoardHeight,
+		extraCellStates: deepClone(before.extraCellStates || {}),
 		oldflickscreendat: before.oldflickscreendat,
 		metadata: before.metadata,
 	}
@@ -2088,6 +2092,7 @@ function Level(lineNumber, width, height, layerCount, objects, section) {
 	this.mainBoardHeight = height;
 	this.extraBoardWidth = 1;
 	this.extraBoardHeight = 1;
+	this.extraCellStates = {};
 }
 
 Level.prototype.delta_index = function(direction)
@@ -2103,6 +2108,7 @@ Level.prototype.clone = function() {
 	clone.mainBoardHeight = this.mainBoardHeight;
 	clone.extraBoardWidth = this.extraBoardWidth;
 	clone.extraBoardHeight = this.extraBoardHeight;
+	clone.extraCellStates = deepClone(this.extraCellStates || {});
 	return clone;
 }
 
@@ -3138,11 +3144,15 @@ Rule.prototype.tryApply = function(level) {
     }
 	perfCounters.matched++;
 	let commandRepeatCount = 1;
+	let commandTuples = null;
+	const hasMatchScopedCommands = this.commands && this.commands.some(cmd =>
+		cmd && (cmd[0] === 'border' || cmd[0] === 'savestate' || cmd[0] === 'loadstate'));
 
     var result=false;	
 	if (this.hasReplacements) {
 	perfCounters.replaces++;
 	var tuples = generateTuples(matches);
+		commandTuples = tuples;
 		commandRepeatCount = Math.max(1, tuples.length);
 	    for (var tupleIndex=0;tupleIndex<tuples.length;tupleIndex++) {
 	        var tuple = tuples[tupleIndex];
@@ -3152,9 +3162,13 @@ Rule.prototype.tryApply = function(level) {
 	        result = success || result;
 	    }
 	}
+	if (!commandTuples && hasMatchScopedCommands) {
+		commandTuples = generateTuples(matches);
+		commandRepeatCount = Math.max(1, commandTuples.length);
+	}
 
     if (matches.length>0) {
-      this.queueCommands(commandRepeatCount);
+      this.queueCommands(commandRepeatCount, commandTuples);
     }
     return result;
 };
@@ -3250,6 +3264,180 @@ function getExtraBoardBounds(level = curLevel) {
 	return { width, height };
 }
 
+function ensureExtraCellStates(level = curLevel) {
+	if (!level.extraCellStates || typeof level.extraCellStates !== 'object') {
+		level.extraCellStates = {};
+	}
+	return level.extraCellStates;
+}
+
+function getExtraCellKeyFromIndex(index, level = curLevel) {
+	if (!state || !state.extraBoardEnabled || !level || !isFinite(index) || isNaN(index)) {
+		return null;
+	}
+	const extraBounds = getExtraBoardBounds(level);
+	if (!extraBounds) {
+		return null;
+	}
+	const x = ((index / level.height) | 0);
+	const y = (index % level.height);
+	if (x < 0 || y < 0 || x >= extraBounds.width || y >= extraBounds.height) {
+		return null;
+	}
+	return `${x},${y}`;
+}
+
+function captureMainBoardState(level = curLevel) {
+	const mainBounds = getMainBoardBounds(level);
+	const baseMask = getBaseObjectMask();
+	if (!mainBounds || !baseMask) {
+		return null;
+	}
+
+	const data = new Array(mainBounds.width * mainBounds.height * STRIDE_OBJ).fill(0);
+	for (let x = 0; x < mainBounds.width; x++) {
+		for (let y = 0; y < mainBounds.height; y++) {
+			const srcIndex = y + x * level.height;
+			const dstIndex = (y + x * mainBounds.height) * STRIDE_OBJ;
+			// getCell() returns a live view into level.objects, so clone before masking.
+			const cell = level.getCell(srcIndex).clone();
+			cell.iand(baseMask);
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				data[dstIndex + w] = cell.data[w];
+			}
+		}
+	}
+
+	return {
+		width: mainBounds.width,
+		height: mainBounds.height,
+		data: data
+	};
+}
+
+function applyMainBoardState(snapshot, level = curLevel) {
+	if (!snapshot || !level || !isFinite(snapshot.width) || !isFinite(snapshot.height) || !Array.isArray(snapshot.data)) {
+		return false;
+	}
+	const newMainWidth = Math.max(1, Math.floor(snapshot.width));
+	const newMainHeight = Math.max(1, Math.floor(snapshot.height));
+	const expectedLen = newMainWidth * newMainHeight * STRIDE_OBJ;
+	if (snapshot.data.length < expectedLen) {
+		return false;
+	}
+
+	const extraSnapshot = snapshotExtraBoard(level);
+	const extraBounds = getExtraBoardBounds(level) || { width: 1, height: 1 };
+	const newWidth = Math.max(newMainWidth, extraBounds.width);
+	const newHeight = Math.max(newMainHeight, extraBounds.height);
+
+	const newObjects = new Int32Array(newWidth * newHeight * STRIDE_OBJ);
+	const bgMask = new BitVec(STRIDE_OBJ);
+	bgMask.ibitset(state.backgroundid);
+	for (let i = 0; i < newWidth * newHeight; i++) {
+		for (let w = 0; w < STRIDE_OBJ; w++) {
+			newObjects[i * STRIDE_OBJ + w] = bgMask.data[w];
+		}
+	}
+
+	for (let x = 0; x < newMainWidth; x++) {
+		for (let y = 0; y < newMainHeight; y++) {
+			const srcIndex = (y + x * newMainHeight) * STRIDE_OBJ;
+			const dstIndex = (y + x * newHeight) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newObjects[dstIndex + w] = snapshot.data[srcIndex + w] | 0;
+			}
+		}
+	}
+
+	level.width = newWidth;
+	level.height = newHeight;
+	level.n_tiles = newWidth * newHeight;
+	level.objects = newObjects;
+	level.mainBoardWidth = newMainWidth;
+	level.mainBoardHeight = newMainHeight;
+
+	if (extraSnapshot) {
+		restoreExtraBoard(level, extraSnapshot);
+	} else {
+		clampExtraBoardBounds(level);
+	}
+	pruneObjectsOutsideBoardBounds(level);
+	RebuildLevelArrays();
+	calculateRowColMasks();
+	return true;
+}
+
+function runStateCellCommand(commandName, matchedTuples, rule) {
+	if (!state || !state.extraBoardEnabled || !Array.isArray(matchedTuples) || matchedTuples.length === 0) {
+		return 0;
+	}
+
+	const level = curLevel;
+	const extraBounds = getExtraBoardBounds(level);
+	const levelHeightAtMatch = level.height;
+	if (!extraBounds || levelHeightAtMatch <= 0) {
+		return 0;
+	}
+
+	const targetIndices = [];
+	for (const tuple of matchedTuples) {
+		if (!Array.isArray(tuple) || tuple.length === 0) {
+			continue;
+		}
+		const idx = tuple[0];
+		if (!isFinite(idx) || isNaN(idx)) {
+			continue;
+		}
+		targetIndices.push(idx | 0);
+	}
+	if (targetIndices.length === 0) {
+		return 0;
+	}
+
+	const store = ensureExtraCellStates(level);
+	const targetKeys = [];
+	for (const index of targetIndices) {
+		const x = ((index / levelHeightAtMatch) | 0);
+		const y = (index % levelHeightAtMatch);
+		if (x < 0 || y < 0 || x >= extraBounds.width || y >= extraBounds.height) {
+			continue;
+		}
+		targetKeys.push(`${x},${y}`);
+	}
+	if (targetKeys.length === 0) {
+		return 0;
+	}
+
+	let applied = 0;
+	for (const key of targetKeys) {
+		if (commandName === 'savestate') {
+			const snap = captureMainBoardState(level);
+			if (!snap) {
+				continue;
+			}
+			store[key] = snap;
+			applied++;
+		} else if (commandName === 'loadstate') {
+			const snap = store[key];
+			if (!snap) {
+				continue;
+			}
+			if (applyMainBoardState(snap, level)) {
+				applied++;
+			}
+		}
+	}
+
+	if (verbose_logging && rule) {
+		const inspect_ID = addToDebugTimeline(curLevel, rule.lineNumber);
+		const logString = htmlColor('green',
+			`Rule ${htmlJump(rule.lineNumber)} triggers command ${commandName} (${applied > 0 ? `applied x${applied}` : 'ignored'}).`);
+		consolePrint(logString, false, rule.lineNumber, inspect_ID);
+	}
+	return applied;
+}
+
 function getBaseObjectMask() {
 	if (!state || !state.extraBoardEnabled || !state.extraIdByBaseId) {
 		return null;
@@ -3295,6 +3483,20 @@ function pruneObjectsOutsideBoardBounds(level = curLevel) {
 	level.mainBoardHeight = mainBounds.height;
 	level.extraBoardWidth = extraBounds.width;
 	level.extraBoardHeight = extraBounds.height;
+	const stateStore = ensureExtraCellStates(level);
+	for (const key of Object.keys(stateStore)) {
+		const parts = key.split(',');
+		if (parts.length !== 2) {
+			delete stateStore[key];
+			continue;
+		}
+		const x = parseInt(parts[0], 10);
+		const y = parseInt(parts[1], 10);
+		if (!isFinite(x) || isNaN(x) || !isFinite(y) || isNaN(y)
+			|| x < 0 || y < 0 || x >= extraBounds.width || y >= extraBounds.height) {
+			delete stateStore[key];
+		}
+	}
 
 	const baseMask = getBaseObjectMask();
 	const extraMask = getExtraObjectMask();
@@ -3373,7 +3575,8 @@ function snapshotExtraBoard(level = curLevel) {
 		for (let y = 0; y < bounds.height; y++) {
 			const srcIndex = y + x * level.height;
 			const dstIndex = (y + x * bounds.height) * STRIDE_OBJ;
-			const cell = level.getCell(srcIndex);
+			// getCell() returns a live view into level.objects, so clone before masking.
+			const cell = level.getCell(srcIndex).clone();
 			cell.iand(extraMask);
 			for (let w = 0; w < STRIDE_OBJ; w++) {
 				data[dstIndex + w] = cell.data[w];
@@ -3569,7 +3772,7 @@ function applyQueuedBorderCommands(commandQueue, dryRun = false) {
 	return changed;
 }
 
-Rule.prototype.queueCommands = function(repeatCount = 1) {
+Rule.prototype.queueCommands = function(repeatCount = 1, matchedTuples = null) {
 	var commands = this.commands;
 	perfCounters.commands += commands.length;	
 	if (commands.length==0){
@@ -3618,6 +3821,9 @@ Rule.prototype.queueCommands = function(repeatCount = 1) {
 			continue;
 		} else if (command[0] == 'gosub') {			// gosub is not queued
 			gosubTarget = command[1];
+			continue;
+		} else if (command[0] == 'savestate' || command[0] == 'loadstate') {
+			runStateCellCommand(command[0], matchedTuples, this);
 			continue;
 		} else if (command[0] == 'border') {
 			if (!state || !state.metadata || !state.metadata.runtime_border_twiddling) {
@@ -3792,7 +3998,7 @@ function applyRandomRuleGroup(level,ruleGroup) {
 	const delta = level.delta_index(rule.direction)
 	var modified = rule.applyAt(level,tuple,check,delta);
 
-    rule.queueCommands();
+    rule.queueCommands(1, [tuple]);
 
   return modified;
 }

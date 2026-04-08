@@ -1392,6 +1392,10 @@ function checkKey(e,justPressed) {
         }
         case 82://r
         {
+        	if (!textMode && justPressed && !againing && !suppressInput && actionKeyInput(e.keyCode)) {
+				pushInput(`actionkey,${e.keyCode}`);
+				return prevent(e);
+			}
         	if (!textMode) {
         		if (justPressed) {
 	        		pushInput("restart");

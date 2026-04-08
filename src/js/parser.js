@@ -29,13 +29,13 @@ let errorCount = 0;         //only counts errors
 let caseSensitive = false;
 
 // used here and in compiler
-const reg_commandwords = /^(afx[\w:=+-.]+|sfx\d+|cancel|checkpoint|restart|win|message|again|undo|nosave|quit|border|zoomscreen|flickscreen|smoothscreen|again_interval|realtime_interval|key_repeat_interval|noundo|norestart|background_color|text_color|goto|message_text_align|status|gosub|link|log|color_palette)$/i;
+const reg_commandwords = /^(afx[\w:=+-.]+|sfx\d+|cancel|checkpoint|restart|win|message|again|undo|nosave|quit|border|savestate|loadstate|zoomscreen|flickscreen|smoothscreen|again_interval|realtime_interval|key_repeat_interval|noundo|norestart|background_color|text_color|goto|message_text_align|status|gosub|link|log|color_palette)$/i;
 const reg_name = /^[\p{L}\p{N}_$]+/u;
 const reg_objectname = /^[\p{L}\p{N}_$]+(:[\p{L}\p{N}_$]+)*/u;              // object name for definition
 const reg_objectnamerel = /^[\p{L}\p{N}_$]+(:[<>v^]|:[\p{L}\p{N}_$]+)*$/u;  // object name with relative parts for use in rules
 const reg_objmodi = /^(canvas|copy|flip|rot|scale|shift|text|translate):/i;
 
-const commandwords_table = ['cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'nosave', 'quit', 'border', 'zoomscreen', 'flickscreen', 'smoothscreen', 
+const commandwords_table = ['cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'nosave', 'quit', 'border', 'savestate', 'loadstate', 'zoomscreen', 'flickscreen', 'smoothscreen', 
     'again_interval', 'realtime_interval', 'key_repeat_interval', 'noundo', 'norestart', 'background_color', 'text_color', 'goto', 'message_text_align', 'status', 'gosub'
 ];
 const commandargs_table = ['message', 'goto', 'status', 'gosub', 'log', 'border'];
@@ -214,7 +214,7 @@ var codeMirrorFn = function() {
         '|', '[', ']', 'up', 'down', 'left', 'right', 'late', 'rigid', '^', 'v', '>', '<', 'no', 'randomdir', 'random', 'horizontal', 'vertical',
         'any', 'all', 'no', 'some', 'moving', 'stationary', 'parallel', 'perpendicular', 'action', 'message', 'move', 
         'create', 'destroy', 'cantmove', 'sfx0', 'sfx1', 'sfx2', 'sfx3', 'Sfx4', 'sfx5', 'sfx6', 'sfx7', 'sfx8', 'sfx9', 'sfx10', 
-        'cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'restart', 'border', 'titlescreen', 'startgame', 'cancel', 'endgame', 
+        'cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'restart', 'border', 'savestate', 'loadstate', 'titlescreen', 'startgame', 'cancel', 'endgame', 
         'startlevel', 'endlevel', 'showmessage', 'closemessage' ];
     const prelude_keywords = ['allow_undo_level', 'auto_level_titles', 'case_sensitive', 'continue_is_level_select', 'debug', 'enable_pause', 
         'level_select', 'level_select_lock', 

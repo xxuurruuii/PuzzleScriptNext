@@ -2102,6 +2102,30 @@ var rule_line = {
     prefixes: prefixes,
 };
 
+    const hasBoardStateCommand = commands.some(c => c[0] === 'savestate' || c[0] === 'loadstate');
+    if (hasBoardStateCommand) {
+        if (!state.extraBoardEnabled) {
+            logError('SAVESTATE/LOADSTATE commands require the EXTRA_BOARD prelude flag.', lineNumber);
+        }
+        let concreteCellCount = 0;
+        let hasEllipsis = false;
+        for (const row of lhs_cells) {
+            for (const cell of row) {
+                if (!Array.isArray(cell)) {
+                    continue;
+                }
+                if (cell[0] === '...' || cell.includes('...')) {
+                    hasEllipsis = true;
+                    continue;
+                }
+                concreteCellCount++;
+            }
+        }
+        if (hasEllipsis || concreteCellCount !== 1) {
+            logError('SAVESTATE/LOADSTATE can only be used in rules that match exactly one concrete cell.', lineNumber);
+        }
+    }
+
     if (directionalRule(rule_line) === false && rule_line.directions.length>1) {
         rule_line.directions.splice(1);
     }
