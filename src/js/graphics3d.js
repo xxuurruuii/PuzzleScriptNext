@@ -61,6 +61,59 @@ const CAMERA_MAX_PITCH = 1.5;
 const CAMERA_MIN_ZOOM = 0.4;
 const CAMERA_MAX_ZOOM = 3.0;
 const CAMERA_ZOOM_STEP = 0.12;
+let threeImportRequested = false;
+let threeImporter = null;
+
+function getThreeImporter() {
+    if (threeImporter !== null) {
+        return threeImporter;
+    }
+    try {
+        threeImporter = new Function('u', 'return import(u);');
+    } catch (err) {
+        threeImporter = false;
+    }
+    return threeImporter;
+}
+
+function ensureThreeLoadedFor3D() {
+    if (typeof THREE !== 'undefined') {
+        return;
+    }
+    if (threeImportRequested) {
+        return;
+    }
+    threeImportRequested = true;
+    const importer = getThreeImporter();
+    if (!importer) {
+        console.warn('3D rendering requested but dynamic import is unavailable; staying in 2D mode.');
+        return;
+    }
+
+    const candidates = [
+        './js/vendor/three.module.js',
+        'https://cdn.jsdelivr.net/npm/three@0.183.0/build/three.module.js',
+        'https://unpkg.com/three@0.183.0/build/three.module.js'
+    ];
+
+    (async () => {
+        for (const url of candidates) {
+            try {
+                const mod = await importer(url);
+                window.THREE = mod;
+                if (typeof redraw === 'function') {
+                    redraw();
+                } else if (typeof canvasResize === 'function') {
+                    canvasResize();
+                }
+                return;
+            } catch (err) {
+                // Try next source.
+            }
+        }
+        console.warn('3D rendering requested but Three.js could not be loaded; staying in 2D mode.');
+    })();
+}
 
 function getSpriteHeightFactor() {
     const configured = state && state.metadata ? parseFloat(state.metadata.default_height) : NaN;
@@ -71,6 +124,12 @@ function getSpriteHeightFactor() {
  * Initialize the Three.js renderer, scene, and camera
  */
 function init3DRenderer() {
+    if (typeof THREE === 'undefined') {
+        ensureThreeLoadedFor3D();
+        window.use3DRenderer = false;
+        return false;
+    }
+
     // Get the canvas container - try different selectors for play.html vs editor.html
     let container = document.querySelector('.gameContainer');
     if (!container) {
