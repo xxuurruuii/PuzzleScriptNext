@@ -1238,7 +1238,7 @@ function levelsToArray(state) {
     //const links = {};
     //const targets = new Set();
     let section, title, description, gotoFlag, input;
-    let levelTitleExplicit = false;
+    let hiddenLevelExplicit = false;
     let expectLayerGrid = false;
     let expectLayerLine = null;
     let expectExtraGrid = false;
@@ -1447,7 +1447,9 @@ function levelsToArray(state) {
             gotoFlag = false;
 		} else if (level[0] == 'level') {
             title = level[1];           // !!!
-            levelTitleExplicit = true;
+		} else if (level[0] == 'hidden') {
+            title = level[1];
+            hiddenLevelExplicit = true;
 		} else if (level[0] == 'title') {
             description = level[1];     // todo: 
             logWarning(`Option TITLE is not implemented, but may be in the future. Let me know if you really need it.`,state.lineNumber);
@@ -1492,12 +1494,12 @@ function levelsToArray(state) {
                 if (!mergeLevelLayer(levels.at(-1), compiledLevel, level[0])) {
                     levels.push(compiledLevel);
                     levels.at(-1).title = title;
-                    levels.at(-1).isLabeledLevel = !!levelTitleExplicit;
+                    levels.at(-1).isLabeledLevel = !!hiddenLevelExplicit;
                     levels.at(-1).linksTop = links.length;
                     if (input) levels.at(-1).input = input;
                     ++levelNo;
                     title = null;
-                    levelTitleExplicit = false;
+                    hiddenLevelExplicit = false;
                 }
                 expectLayerGrid = false;
                 expectLayerLine = null;
@@ -1511,12 +1513,12 @@ function levelsToArray(state) {
                 }
 			    levels.push(compiledLevel);
                 levels.at(-1).title = title;
-                levels.at(-1).isLabeledLevel = !!levelTitleExplicit;
+                levels.at(-1).isLabeledLevel = !!hiddenLevelExplicit;
                 levels.at(-1).linksTop = links.length;
                 if (input) levels.at(-1).input = input;
                 ++levelNo;
                 title = null;
-                levelTitleExplicit = false;
+                hiddenLevelExplicit = false;
             }
 		}
 	});

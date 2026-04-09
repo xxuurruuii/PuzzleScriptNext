@@ -1768,7 +1768,7 @@ var codeMirrorFn = function() {
         function getTokens() {
             let token
             // start of parse
-            if (token = lexer.match(/^(goto|level|link|message|section|title|input|layer|extra)/i, true)) { // allow omision of whitespace (with no warning!)
+            if (token = lexer.match(/^(goto|hidden|level|link|message|section|title|input|layer|extra)/i, true)) { // allow omision of whitespace (with no warning!)
                 symbols.start = token;
                 lexer.pushToken(token, `${token.toUpperCase()}_VERB`);
 
@@ -1817,7 +1817,7 @@ var codeMirrorFn = function() {
                 state.levels.pop();
                 toplevel = null;
             }
-            const cmds = [ 'goto', 'level', 'link', 'message', 'section', 'title', 'input', 'layer', 'extra' ];
+            const cmds = [ 'goto', 'hidden', 'level', 'link', 'message', 'section', 'title', 'input', 'layer', 'extra' ];
             if (cmds.includes(symbols.start))
                 state.levels.push([ symbols.start, symbols.text, state.lineNumber, symbols.link ]);
             else {
