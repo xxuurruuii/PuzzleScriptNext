@@ -65,6 +65,7 @@ This gives you depth, lighting, and clearer visual layering while keeping your g
 <h2>How to use it</h2>
 <ol>
   <li>Add <b>render_height</b> in the prelude of your game script.</li>
+  <li>Optional: add <b>default_height &lt;number&gt;</b> to adjust 3D object height (default is <b>0.2</b>).</li>
   <li>Build and run the game as usual.</li>
   <li>Gameplay levels render in 3D automatically.</li>
 </ol>
@@ -72,6 +73,7 @@ This gives you depth, lighting, and clearer visual layering while keeping your g
 <pre><code>title Example
 author You
 render_height
+default_height 0.35
 
 ========
 OBJECTS
@@ -89,6 +91,8 @@ OBJECTS
 <ul>
   <li>3D view is for gameplay screens; text/menu screens remain in their normal style.</li>
   <li>Your puzzle mechanics do not change; only presentation changes.</li>
+  <li><b>default_height</b> only affects 3D rendering when <b>render_height</b> is enabled.</li>
+  <li>If <b>default_height</b> is omitted or invalid, the renderer uses <b>0.2</b>.</li>
   <li>Test readability on several levels and keep sprites clear and high contrast.</li>
 </ul>
 
