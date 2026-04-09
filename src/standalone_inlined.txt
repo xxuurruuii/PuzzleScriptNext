@@ -9269,8 +9269,7 @@ function redraw3D() {
 
         // DirectionalLight uses orthographic shadow camera - update coverage bounds
         keyLight.shadow.camera.near = 0.5;
-        const spriteHeightFactor = getSpriteHeightFactor();
-        keyLight.shadow.camera.far = shadowSize * 12 * spriteHeightFactor;
+        keyLight.shadow.camera.far = shadowSize * 12 * DEFAULT_SPRITE_HEIGHT;
         keyLight.shadow.camera.left = -shadowSize;
         keyLight.shadow.camera.right = shadowSize;
         keyLight.shadow.camera.top = shadowSize;
@@ -9278,7 +9277,7 @@ function redraw3D() {
         keyLight.shadow.camera.updateProjectionMatrix();
 
         // Position key light relative to level center (front-right-above)
-        keyLight.position.set(shadowSize * 0.8, shadowSize * 3 * spriteHeightFactor, shadowSize * 0.6);
+        keyLight.position.set(shadowSize * 0.8, shadowSize * 3 * DEFAULT_SPRITE_HEIGHT, shadowSize * 0.6);
         keyLight.target.position.set(0, 0, 0);
         keyLight.intensity = 1.5;
 
