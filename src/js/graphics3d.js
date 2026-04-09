@@ -42,7 +42,7 @@ const CAMERA_FOV = 40;
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 1000;
 const CUBE_SIZE = 1;
-const SPRITE_HEIGHT = 0.2;  // Sprite height as fraction of grid cell size.
+const DEFAULT_SPRITE_HEIGHT = 0.2;  // Sprite height factor when metadata.default_height is not set.
 const CAMERA_DISTANCE = 1.5;
 
 // Camera position and rotation
@@ -61,6 +61,11 @@ const CAMERA_MAX_PITCH = 1.5;
 const CAMERA_MIN_ZOOM = 0.4;
 const CAMERA_MAX_ZOOM = 3.0;
 const CAMERA_ZOOM_STEP = 0.12;
+
+function getSpriteHeightFactor() {
+    const configured = state && state.metadata ? parseFloat(state.metadata.default_height) : NaN;
+    return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_SPRITE_HEIGHT;
+}
 
 /**
  * Initialize the Three.js renderer, scene, and camera
@@ -414,7 +419,8 @@ function getOrCreateSpriteGeometry(spriteIndex) {
     const indices = [];
 
     const halfSize = CUBE_SIZE / 2;
-    const halfSizeVertical = SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size / 2;
+    const spriteHeightFactor = getSpriteHeightFactor();
+    const halfSizeVertical = spriteHeightFactor * CUBE_SIZE * state.sprite_size / 2;
     const uvScale = 0.1;
 
     function addVertex(x, y, z, nx, ny, nz, color) {
@@ -1006,7 +1012,8 @@ function createSprite3D(spriteIndex, gridX, gridY, layer, visibleWidth, visibleH
     const spriteOffset = obj.spriteoffset || { x: 0, y: 0 };
     const baseX = gridX * cellSizeX - totalWidth / 2 + spriteOffset.x * CUBE_SIZE;
     const baseZ = gridY * cellSizeZ - totalHeight / 2 + (state.sprite_size - sprite.dat.length) + spriteOffset.y * CUBE_SIZE;
-    const baseY = layer * SPRITE_HEIGHT * CUBE_SIZE * state.sprite_size;
+    const spriteHeightFactor = getSpriteHeightFactor();
+    const baseY = layer * spriteHeightFactor * CUBE_SIZE * state.sprite_size;
 
     // Get or create the InstancedMesh for this sprite
     let mesh = instancedMeshes[spriteIndex];
@@ -1186,7 +1193,8 @@ function redraw3D() {
 
         // DirectionalLight uses orthographic shadow camera - update coverage bounds
         keyLight.shadow.camera.near = 0.5;
-        keyLight.shadow.camera.far = shadowSize * 12 * SPRITE_HEIGHT;
+        const spriteHeightFactor = getSpriteHeightFactor();
+        keyLight.shadow.camera.far = shadowSize * 12 * spriteHeightFactor;
         keyLight.shadow.camera.left = -shadowSize;
         keyLight.shadow.camera.right = shadowSize;
         keyLight.shadow.camera.top = shadowSize;
@@ -1194,7 +1202,7 @@ function redraw3D() {
         keyLight.shadow.camera.updateProjectionMatrix();
 
         // Position key light relative to level center (front-right-above)
-        keyLight.position.set(shadowSize * 0.8, shadowSize * 3 * SPRITE_HEIGHT, shadowSize * 0.6);
+        keyLight.position.set(shadowSize * 0.8, shadowSize * 3 * spriteHeightFactor, shadowSize * 0.6);
         keyLight.target.position.set(0, 0, 0);
         keyLight.intensity = 1.5;
 

@@ -22,6 +22,7 @@
             ["debug", "", "This outputs the compiled instructions whenever you build your file."],
             ["enable_pause", "", "Enable pause menu when Escape key is pressed."],
             ["render_height", "", "Enable 3D renderer for gameplay screens."],
+            ["default_height", "0.2", "Default object height factor used by 3D rendering when render_height is enabled."],
             ["flickscreen", "8x5", "Setting flickscreen divides each level into WxH grids, and zooms the camera in so that the player can only see one at a time"],
             ["homepage", "www.puzzlescript.net", "A link to your homepage!"],
             ["key_repeat_interval", "0.1", "When you hold down a key, how long is the delay between repeated presses getting sent to the game (in seconds)?"],

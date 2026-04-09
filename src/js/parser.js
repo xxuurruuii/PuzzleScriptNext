@@ -224,7 +224,7 @@ var codeMirrorFn = function() {
         'skip_title_screen', 'smoothscreen_debug', 'status_line', 'throttle_movement', 'verbose_logging'];
     const prelude_param_text = ['title', 'author', 'homepage', 'custom_font', 'text_controls', 'text_message_continue', 'debug_switch', 'export_options' ];
     const prelude_param_number = ['again_interval', 'animate_interval', 'font_size', 'key_repeat_interval', 
-        'level_select_unlocked_ahead', 'level_select_unlocked_rollover', 'local_radius', 'realtime_interval', 
+        'level_select_unlocked_ahead', 'level_select_unlocked_rollover', 'local_radius', 'realtime_interval', 'default_height',
         'tween_length', 'tween_snap'];
     const prelude_param_single = [
         'background_color', 'flickscreen', 'level_select_solve_symbol', 'keyhint_color', 
