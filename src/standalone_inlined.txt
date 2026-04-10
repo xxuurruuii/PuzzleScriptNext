@@ -14385,70 +14385,135 @@ function checkWin(dontDoWin) {
 		return;
 	}
 
-	var won= false;
-	if (state.winconditions.length>0)  {
-		var passed=true;
-		for (var wcIndex=0;wcIndex<state.winconditions.length;wcIndex++) {
-			var wincondition = state.winconditions[wcIndex];
-			var filter1 = wincondition[1];
-			var filter2 = wincondition[2];
-			var aggr1 = wincondition[4];
-			var aggr2 = wincondition[5];
+	function mapMaskToScope(mask, scope) {
+		if (!mask || !state || !state.extraBoardEnabled || !state.baseIdByExtraId || !state.extraIdByBaseId) {
+			return mask;
+		}
+		if (scope === 'main') {
+			const mapped = new BitVec(STRIDE_OBJ);
+			for (let id = 0; id < state.objectCount; id++) {
+				if (!mask.get(id)) continue;
+				if (state.baseIdByExtraId[id] !== undefined) {
+					continue;
+				}
+				let targetId = id;
+				if (state.baseIdByExtraId[id] !== undefined) {
+					targetId = state.baseIdByExtraId[id];
+				} else if (state.extraIdByBaseId[id] !== undefined) {
+					targetId = id;
+				}
+				if (isFinite(targetId) && targetId >= 0) {
+					mapped.ibitset(targetId);
+				}
+			}
+			return mapped;
+		}
+		if (scope === 'extra') {
+			const mapped = new BitVec(STRIDE_OBJ);
+			for (let id = 0; id < state.objectCount; id++) {
+				if (!mask.get(id)) continue;
+				let targetId = id;
+				if (state.baseIdByExtraId[id] !== undefined) {
+					targetId = id;
+				} else if (state.extraIdByBaseId[id] !== undefined) {
+					targetId = state.extraIdByBaseId[id];
+				}
+				if (isFinite(targetId) && targetId >= 0) {
+					mapped.ibitset(targetId);
+				}
+			}
+			return mapped;
+		}
+		return mask;
+	}
 
-			var rulePassed=true;
-			
-			const f1 = aggr1 ? c=>filter1.bitsSetInArray(c) : c=>!filter1.bitsClearInArray(c);
-			const f2 = aggr2 ? c=>filter2.bitsSetInArray(c) : c=>!filter2.bitsClearInArray(c);
+	function evaluateWinconditionInScope(wincondition, scope) {
+		const bounds = (scope === 'extra') ? getExtraBoardBounds(curLevel) : getMainBoardBounds(curLevel);
+		if (!bounds) {
+			return false;
+		}
+		const width = bounds.width;
+		const height = bounds.height;
+		const filter1 = mapMaskToScope(wincondition[1], scope);
+		const filter2 = mapMaskToScope(wincondition[2], scope);
+		const aggr1 = wincondition[4];
+		const aggr2 = wincondition[5];
 
-			switch(wincondition[0]) {
-				case -1://NO
-				{
-					for (var i=0;i<curLevel.n_tiles;i++) {
-						var cell = curLevel.getCellInto(i,_o10);
-						if ( (f1(cell.data)) &&  
-							 (f2(cell.data)) ) {
-							rulePassed=false;
+		let rulePassed = true;
+		const f1 = aggr1 ? c => filter1.bitsSetInArray(c) : c => !filter1.bitsClearInArray(c);
+		const f2 = aggr2 ? c => filter2.bitsSetInArray(c) : c => !filter2.bitsClearInArray(c);
+
+		switch(wincondition[0]) {
+			case -1: // NO
+			{
+				for (let x = 0; x < width; x++) {
+					for (let y = 0; y < height; y++) {
+						const i = y + x * curLevel.height;
+						const cell = curLevel.getCellInto(i, _o10);
+						if ((f1(cell.data)) && (f2(cell.data))) {
+							rulePassed = false;
 							break;
 						}
 					}
+					if (!rulePassed) break;
+				}
+				break;
+			}
+			case 0: // SOME
+			{
+				let passedTest = false;
+				for (let x = 0; x < width; x++) {
+					for (let y = 0; y < height; y++) {
+						const i = y + x * curLevel.height;
+						const cell = curLevel.getCellInto(i, _o10);
+						if ((f1(cell.data)) && (f2(cell.data))) {
+							passedTest = true;
+							break;
+						}
+					}
+					if (passedTest) break;
+				}
+				if (passedTest === false) {
+					rulePassed = false;
+				}
+				break;
+			}
+			case 1: // ALL
+			{
+				for (let x = 0; x < width; x++) {
+					for (let y = 0; y < height; y++) {
+						const i = y + x * curLevel.height;
+						const cell = curLevel.getCellInto(i, _o10);
+						if ((f1(cell.data)) && (!f2(cell.data))) {
+							rulePassed = false;
+							break;
+						}
+					}
+					if (!rulePassed) break;
+				}
+				break;
+			}
+		}
+		return rulePassed;
+	}
 
-          break;
-        }
-        case 0://SOME
-        {
-          var passedTest=false;
-          for (var i=0;i<curLevel.n_tiles;i++) {
-            var cell = curLevel.getCellInto(i,_o10);
-						if ( (f1(cell.data)) &&  
-							 (f2(cell.data)) ) {
-              passedTest=true;
-              break;
-            }
-          }
-          if (passedTest===false) {
-            rulePassed=false;
-          }
-          break;
-        }
-        case 1://ALL
-        {
-          for (var i=0;i<curLevel.n_tiles;i++) {
-            var cell = curLevel.getCellInto(i,_o10);
-						if ( (f1(cell.data)) &&  
-							 (!f2(cell.data)) ) {
-              rulePassed=false;
-              break;
-            }
-          }
-          break;
-        }
-      }
-      if (rulePassed===false) {
-        passed=false;
-      }
-    }
-    won=passed;
-  }
+	var won= false;
+	if (state.winconditions.length>0)  {
+		let passed = true;
+		for (let wcIndex = 0; wcIndex < state.winconditions.length; wcIndex++) {
+			const wincondition = state.winconditions[wcIndex];
+			const mainPassed = evaluateWinconditionInScope(wincondition, 'main');
+			const extraPassed = (state && state.extraBoardEnabled) ? evaluateWinconditionInScope(wincondition, 'extra') : mainPassed;
+			const rulePassed = (state && state.extraBoardEnabled && wincondition[0] === 0)
+				? (mainPassed || extraPassed)
+				: (mainPassed && extraPassed);
+			if (!rulePassed) {
+				passed = false;
+				break;
+			}
+		}
+		won = passed;
+	}
 
 	if (won) {
 		if (runrulesonlevelstart_phase){
