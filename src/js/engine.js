@@ -816,12 +816,126 @@ function gotoLevel(index) {
 	clearInputHistory();
 	processLevelInput();
 }
+
+function resolveLinkTargetLevelNo(targetNo) {
+	if (!state || !Array.isArray(state.levels) || !isFinite(targetNo)) {
+		return -1;
+	}
+	if (targetNo === -9999) {
+		return -1;
+	}
+	if (targetNo >= 0) {
+		if (!Array.isArray(state.sections) || targetNo >= state.sections.length) {
+			return -1;
+		}
+		const targetSection = state.sections[targetNo];
+		if (!targetSection || targetSection.firstLevel == null || targetSection.firstLevel < 0) {
+			return -1;
+		}
+		const sectionStart = getFirstSectionAutoLevelIndex(targetSection.name);
+		const resolved = sectionStart >= 0 ? sectionStart : targetSection.firstLevel;
+		return (resolved >= 0 && resolved < state.levels.length) ? resolved : -1;
+	}
+	const resolved = -1 - targetNo;
+	return (resolved >= 0 && resolved < state.levels.length) ? resolved : -1;
+}
+
+function cacheExtraBoardLinkTargets(level = curLevel, sourceLevelDat = null) {
+	if (!state || !state.extraBoardEnabled || !level || !Array.isArray(state.links)) {
+		return;
+	}
+	let visibleLinkCount = isFinite(level.linksTop) ? Math.max(0, level.linksTop | 0) : 0;
+	if (visibleLinkCount === 0 && sourceLevelDat && isFinite(sourceLevelDat.linksTop)) {
+		visibleLinkCount = Math.max(0, sourceLevelDat.linksTop | 0);
+	}
+	if (visibleLinkCount === 0 && isFinite(curLevelNo) && state.levels && state.levels[curLevelNo] && isFinite(state.levels[curLevelNo].linksTop)) {
+		visibleLinkCount = Math.max(0, state.levels[curLevelNo].linksTop | 0);
+	}
+	if (visibleLinkCount === 0) {
+		return;
+	}
+	const visibleLinks = state.links.slice(0, visibleLinkCount).reverse();
+	if (visibleLinks.length === 0) {
+		return;
+	}
+
+	const getLinkMatchNames = function(linkObject) {
+		const names = [];
+		let objectName = null;
+		let baseId = null;
+
+		if (typeof linkObject === 'string') {
+			objectName = linkObject;
+			if (state.objects && state.objects[linkObject] && isFinite(state.objects[linkObject].id)) {
+				baseId = state.objects[linkObject].id | 0;
+			}
+		} else if (isFinite(linkObject) && !isNaN(linkObject)) {
+			const numericId = linkObject | 0;
+			if (state.idDict && state.idDict[numericId] !== undefined) {
+				objectName = state.idDict[numericId];
+			}
+			if (state.baseIdByExtraId && state.baseIdByExtraId[numericId] !== undefined) {
+				baseId = state.baseIdByExtraId[numericId] | 0;
+			} else {
+				baseId = numericId;
+			}
+		}
+
+		if (objectName) {
+			names.push(objectName);
+		}
+		if (baseId !== null && state.extraIdByBaseId && state.extraIdByBaseId[baseId] !== undefined) {
+			const extraId = state.extraIdByBaseId[baseId] | 0;
+			if (state.idDict && state.idDict[extraId] !== undefined) {
+				names.push(state.idDict[extraId]);
+			}
+		}
+
+		return Array.from(new Set(names));
+	};
+
+	const extraBounds = getExtraBoardBounds(level);
+	const store = ensureExtraCellStates(level);
+	for (let x = 0; x < extraBounds.width; x++) {
+		for (let y = 0; y < extraBounds.height; y++) {
+			const idx = y + x * level.height;
+			const objids = level.getObjects(idx);
+			let matched = null;
+			for (const link of visibleLinks) {
+				const matchNames = getLinkMatchNames(link.object);
+				if (matchNames.some(name => objids.includes(name))) {
+					matched = link;
+					break;
+				}
+			}
+			if (!matched) {
+				continue;
+			}
+			const targetLevelNo = resolveLinkTargetLevelNo(matched.targetNo);
+			if (targetLevelNo < 0) {
+				continue;
+			}
+			const targetLevel = state.levels[targetLevelNo];
+			if (!isMapLevelEntry(targetLevel)) {
+				continue;
+			}
+			const snapshot = captureMainBoardState(targetLevel);
+			if (!snapshot) {
+				continue;
+			}
+			store[`${x},${y}`] = snapshot;
+		}
+	}
+}
   
 function gotoLink() {
 	if (debugSwitch.includes('load')) console.log('gotoLink()', `stack:`, linkStack);
   	if (solving) return;
 	for (const position of playerPositions) {
 		const level = state.levels[curLevelNo];
+		if (state && state.extraBoardEnabled && getExtraCellKeyFromIndex(position, curLevel) !== null) {
+			continue;
+		}
 		const objids = level.getObjects(position);
 		for (const link of state.links // use the most recent visible link definition
 				.slice(0, level.linksTop)
@@ -1027,6 +1141,9 @@ function loadLevelFromLevelDat(state,leveldat,randomseed,clearinputhistory) {
       	titleMode=0;
       	textMode=false;
     	curLevel = leveldat.clone();
+		if (state.extraBoardEnabled) {
+			cacheExtraBoardLinkTargets(curLevel, leveldat);
+		}
 		if (verbose_logging)
 			consolePrint(`Loading "${leveldat.section || leveldat.title}" (${htmlJump(leveldat.lineNumber)}).`, true, leveldat.lineNumber);  //todo:
     	RebuildLevelArrays();
