@@ -464,6 +464,18 @@ a {
 </script>
 
 <!--___SCRIPTINSERT___-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "./js/vendor/three.module.js",
+    "three/addons/": "./js/vendor/three-addons/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+window.THREE = THREE;
+</script>
 <script>
 function storage_has(key){
     const value = localStorage.getItem(key) != undefined;
@@ -7227,6 +7239,89 @@ function glyphCount() {
     return state.glyphOrder.filter(g => g.length == 1).length;
 }
 
+function shouldShowExtraDebugBoard() {
+    if (!state || !state.metadata || !state.extraBoardEnabled || textMode) {
+        return false;
+    }
+    if (levelEditorOpened) {
+        // In editor mode, always show the extra board when EXTRA_BOARD is enabled.
+        return true;
+    }
+    return !!state.metadata.extra_debug;
+}
+
+function getExtraBoardGapColumns() {
+    return levelEditorOpened ? 2 : 1;
+}
+
+function getExtraBoardShiftColumns(level = curLevel) {
+    const mainBoardSize = getMainBoardSize(level);
+    return mainBoardSize.width + getExtraBoardGapColumns();
+}
+
+function getEditorBoardLayout(level = curLevel) {
+    if (!levelEditorOpened || textMode || !level) {
+        return null;
+    }
+
+    const mainSize = getMainBoardSize(level);
+    const main = {
+        kind: 'main',
+        x0: 0,
+        y0: 0,
+        x1: Math.max(0, mainSize.width - 1),
+        y1: Math.max(0, mainSize.height - 1),
+        leftHandle: -1,
+        rightHandle: mainSize.width,
+        topHandle: -1,
+        bottomHandle: mainSize.height
+    };
+
+    let extra = null;
+    const extraSize = getExtraDebugBoardSize(level);
+    if (extraSize) {
+        const startX = getExtraBoardShiftColumns(level);
+        extra = {
+            kind: 'extra',
+            x0: startX,
+            y0: 0,
+            x1: startX + Math.max(0, extraSize.width - 1),
+            y1: Math.max(0, extraSize.height - 1),
+            leftHandle: startX - 1,
+            rightHandle: startX + extraSize.width,
+            topHandle: -1,
+            bottomHandle: extraSize.height
+        };
+    }
+
+    return { main, extra };
+}
+
+function getExtraDebugBoardSize(level = curLevel) {
+    if (!shouldShowExtraDebugBoard() || !level) {
+        return null;
+    }
+
+    const widthRaw = isFinite(level.extraBoardWidth) ? Math.floor(level.extraBoardWidth) : 1;
+    const heightRaw = isFinite(level.extraBoardHeight) ? Math.floor(level.extraBoardHeight) : 1;
+    return {
+        width: Math.max(1, Math.min(level.width, widthRaw)),
+        height: Math.max(1, Math.min(level.height, heightRaw))
+    };
+}
+
+function getMainBoardSize(level = curLevel) {
+    if (!level) {
+        return { width: 1, height: 1 };
+    }
+    const widthRaw = isFinite(level.mainBoardWidth) ? Math.floor(level.mainBoardWidth) : level.width;
+    const heightRaw = isFinite(level.mainBoardHeight) ? Math.floor(level.mainBoardHeight) : level.height;
+    return {
+        width: Math.max(1, Math.min(level.width, widthRaw)),
+        height: Math.max(1, Math.min(level.height, heightRaw))
+    };
+}
+
 function redraw() {
     if (cellwidth===0||cellheight===0) {
         return;
@@ -7312,8 +7407,8 @@ function redrawCellGrid(curlevel) {
     };
 
     if (levelEditorOpened) {
-        minMaxIJ[2] -= 2;
-        minMaxIJ[3] -= 2 + editorRowCount;
+        const mainSize = getMainBoardSize(curlevel);
+        minMaxIJ = [0, 0, mainSize.width, mainSize.height];
     } else if (flickscreen) {
         var playerPositions = getPlayerPositions();
         if (playerPositions.length>0) {
@@ -7451,10 +7546,17 @@ function redrawCellGrid(curlevel) {
     if (isAnimating && debugSwitch.includes('tween')) console.log(`tween moveTween=${moveTween} animTween=${animTween} seedsToAnimate=`, seedsToAnimate, `currentMovedEntities=`, currentMovedEntities);
 
     const render = new RenderOrder(minMaxIJ);
-    if (!levelEditorOpened && !showLayers)
+    const extraDebugVisible = shouldShowExtraDebugBoard();
+    const extraDebugSize = extraDebugVisible ? getExtraDebugBoardSize(curlevel) : null;
+    const layoutBoardHeight = (extraDebugVisible && extraDebugSize && !levelEditorOpened)
+        ? Math.max(screenheight, extraDebugSize.height)
+        : screenheight;
+    if (!levelEditorOpened && !showLayers && !extraDebugVisible)
     //if (!levelEditorOpened)
         setClip(render);
     drawObjects(render);
+    if (extraDebugVisible)
+        drawExtraBoard(render);
 
     // show layer no
     if (showLayers) {
@@ -7465,7 +7567,7 @@ function redrawCellGrid(curlevel) {
 
     if (state.metadata.status_line)
         drawTextWithFont(ctx, statusText, state.fgcolor, 
-            xoffset + screenwidth * cellwidth / 2, yoffset + screenheight * cellheight + textcellheight * 0.6, textcellheight * 0.6);
+            xoffset + screenwidth * cellwidth / 2, yoffset + layoutBoardHeight * cellheight + textcellheight * 0.6, textcellheight * 0.6);
 
     if (diffToVisualize)
         drawDiffToVisualize();
@@ -7570,6 +7672,52 @@ function redrawCellGrid(curlevel) {
             }
         }
     } 
+
+    function drawExtraBoard(render) {
+        const extraBoardSize = getExtraDebugBoardSize(curLevel);
+        if (!extraBoardSize) {
+            return;
+        }
+        const boardShiftPixels = getExtraBoardShiftColumns(curlevel) * cellwidth;
+
+        for (const group of state.collisionLayerGroups) {
+            for (let x = 0; x < extraBoardSize.width; x++) {
+                for (let y = 0; y < extraBoardSize.height; y++) {
+                    const posindex = y + x * curlevel.height;
+                    const posmask = curlevel.getCellInto(posindex, _o12);
+                    for (let k = group.firstObjectNo; k < group.firstObjectNo + group.numObjects; ++k) {
+                        const extraId = state.extraIdByBaseId ? state.extraIdByBaseId[k] : undefined;
+                        if (extraId === undefined || !posmask.get(extraId)) {
+                            continue;
+                        }
+
+                        const obj = state.objects[state.idDict[extraId]];
+                        const vector = obj.vector;
+                        const spriteSize = vector ? {
+                            w: (vector.w || 1) * cellwidth,
+                            h: (vector.h || 1) * cellheight,
+                        } : {
+                            w: obj.spritematrix.reduce((acc, row) => Math.max(acc, row.length), 0) * pixelSize,
+                            h: obj.spritematrix.length * pixelSize,
+                        };
+
+                        const drawpos = render.getDrawPos(posindex, obj);
+                        const rc = {
+                            x: Math.floor(drawpos.x + boardShiftPixels),
+                            y: Math.floor(drawpos.y),
+                            w: spriteSize.w,
+                            h: spriteSize.h
+                        };
+
+                        ctx.drawImage(
+                            spriteImages[extraId], 0, 0, spriteSize.w, spriteSize.h,
+                            rc.x, rc.y, rc.w, rc.h
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     // update animation parameters based on kind and dir, based on tween curve
     function calcAnimate(afx, kind, dir, params, tween) {
@@ -7815,6 +7963,41 @@ function drawEditorIcons(mini,minj) {
 
 	var ypos = editorRowCount-(-mouseCoordY-2)-1;
 	var mouseIndex=(toolbarMouseCol-1)+toolbarSlotsPerRow*ypos;
+    const boardLayout = getEditorBoardLayout(curLevel);
+
+    function getBoardCellFromMouse(mx, my) {
+        if (!boardLayout) {
+            return null;
+        }
+        const boards = [boardLayout.main, boardLayout.extra].filter(Boolean);
+        for (const board of boards) {
+            if (mx >= board.x0 && mx <= board.x1 && my >= board.y0 && my <= board.y1) {
+                return {
+                    board: board,
+                    levelX: mx - board.x0,
+                    levelY: my - board.y0
+                };
+            }
+        }
+        return null;
+    }
+
+    function isOnBoardResizeHandle(mx, my) {
+        if (!boardLayout) {
+            return false;
+        }
+        const boards = [boardLayout.main, boardLayout.extra].filter(Boolean);
+        for (const board of boards) {
+            const onLeft = (mx === board.leftHandle) && (my >= board.topHandle && my <= board.bottomHandle);
+            const onRight = (mx === board.rightHandle) && (my >= board.topHandle && my <= board.bottomHandle);
+            const onTop = (my === board.topHandle) && (mx >= board.leftHandle && mx <= board.rightHandle);
+            const onBottom = (my === board.bottomHandle) && (mx >= board.leftHandle && mx <= board.rightHandle);
+            if (onLeft || onRight || onTop || onBottom) {
+                return true;
+            }
+        }
+        return false;
+    }
 
 	for (var i=0;i<glyphsToDisplay;i++) {
 		var glyphIndex = glyphStartIndex+i;
@@ -7848,14 +8031,19 @@ function drawEditorIcons(mini,minj) {
         }
     }
     // prepare tooltip: content of a level's cell
-    else if ( (mouseCoordX >= 0) && (mouseCoordY >= 0) && (mouseCoordX < screenwidth) && (mouseCoordY < screenheight-editorRowCount-2) )
-    {
-        const posMask = curLevel.getCellInto((mouseCoordY+minj) + (mouseCoordX+mini)*curLevel.height, _o12);
-        tooltip_objects = state.idDict.filter( (x,k) => (posMask.get(k) != 0) )
-            // prepare tooltip: object names
-        if (tooltip_objects !== null)
-        {
-            tooltip_string = tooltip_objects.join(', ')
+    else {
+        const boardCell = getBoardCellFromMouse(mouseCoordX, mouseCoordY);
+        if (boardCell) {
+            const posMask = curLevel.getCellInto((boardCell.levelY + minj) + (boardCell.levelX + mini) * curLevel.height, _o12);
+            tooltip_objects = state.idDict.filter((x, k) => (posMask.get(k) != 0));
+            if (boardCell.board.kind === 'extra') {
+                tooltip_objects = tooltip_objects.map(name =>
+                    name.startsWith("__extra__") ? name.substring("__extra__".length) : name
+                );
+            }
+            if (tooltip_objects !== null) {
+                tooltip_string = tooltip_objects.join(', ');
+            }
         }
     }
 
@@ -7869,19 +8057,21 @@ function drawEditorIcons(mini,minj) {
 		ctx.fillText(tooltip_string, canvas.width/2, toolbarTopY + editorRowCount*cellheight + 0.5*cellheight);//, screenwidth * cellwidth);
     }
 
-	if (mouseCoordX>=-1&&mouseCoordY>=-1&&mouseCoordX<screenwidth-1&&mouseCoordY<screenheight-1-editorRowCount) {
-		if (mouseCoordX==-1||mouseCoordY==-1||mouseCoordX==screenwidth-2||mouseCoordY===screenheight-2-editorRowCount) {
-			ctx.drawImage(glyphHighlightResize,
-				xoffset+mouseCoordX*cellwidth,
-				yoffset+mouseCoordY*cellheight
-				);								
-		} else {
-			ctx.drawImage(glyphHighlight,
-				xoffset+mouseCoordX*cellwidth,
-				yoffset+mouseCoordY*cellheight
-				);				
-		}
-	}
+    const boardCell = getBoardCellFromMouse(mouseCoordX, mouseCoordY);
+    const onResizeHandle = isOnBoardResizeHandle(mouseCoordX, mouseCoordY);
+    if (boardCell || onResizeHandle) {
+        if (onResizeHandle) {
+            ctx.drawImage(glyphHighlightResize,
+                xoffset + mouseCoordX * cellwidth,
+                yoffset + mouseCoordY * cellheight
+            );
+        } else {
+            ctx.drawImage(glyphHighlight,
+                xoffset + mouseCoordX * cellwidth,
+                yoffset + mouseCoordY * cellheight
+            );
+        }
+    }
 
 }
 
@@ -7903,9 +8093,11 @@ function canvasResize(level) {
     canvas.width = canvas.parentNode.clientWidth;
     canvas.height = canvas.parentNode.clientHeight;
 
-    screenwidth = level.width;        // board size, used to calculate cell size
-    screenheight = level.height;
+    const mainBoardSize = getMainBoardSize(level);
+    screenwidth = mainBoardSize.width;        // board size, used to calculate cell size
+    screenheight = mainBoardSize.height;
     if (!state) throw 'oops!';
+    let editorBoardHeight = mainBoardSize.height;
 
     flickscreen=state.metadata.flickscreen!==undefined;
     zoomscreen=state.metadata.zoomscreen!==undefined;
@@ -7914,10 +8106,18 @@ function canvasResize(level) {
         screenwidth = TITLE_WIDTH;
         screenheight = TITLE_HEIGHT;
     } else if (levelEditorOpened) {
-        screenwidth += 2;
+        const extraEditorVisible = shouldShowExtraDebugBoard();
+        const extraEditorSize = extraEditorVisible ? getExtraDebugBoardSize(level) : null;
+        const extraEditorWidth = extraEditorSize ? extraEditorSize.width : 0;
+        const extraEditorHeight = extraEditorSize ? extraEditorSize.height : 0;
+        editorBoardHeight = extraEditorVisible
+            ? Math.max(mainBoardSize.height, extraEditorHeight)
+            : mainBoardSize.height;
+        // editor width includes both boards (if any), plus one resize border around each board.
+        screenwidth = mainBoardSize.width + 2 + (extraEditorVisible ? (extraEditorWidth + 2) : 0);
         const glyphcount = glyphCount();
-        editorRowCount = Math.ceil(glyphcount/(screenwidth-1));
-        screenheight += 2 + editorRowCount;
+        editorRowCount = Math.ceil(glyphcount / Math.max(1, (screenwidth - 1)));
+        screenheight = editorBoardHeight + 2 + editorRowCount;
     } else if (flickscreen) {
         screenwidth=state.metadata.flickscreen[0];
         screenheight=state.metadata.flickscreen[1];
@@ -7931,10 +8131,20 @@ function canvasResize(level) {
     }
 
     statusLineHeight = state.metadata.status_line ? canvas.height / TITLE_HEIGHT : 0;
+    const extraDebugVisible = shouldShowExtraDebugBoard();
+    const extraBoardSize = getExtraDebugBoardSize(level);
+    const extraVisibleWidth = (extraDebugVisible && extraBoardSize) ? extraBoardSize.width : 0;
+    const extraVisibleHeight = (extraDebugVisible && extraBoardSize) ? extraBoardSize.height : 0;
+    const layoutScreenWidth = (!levelEditorOpened && extraDebugVisible)
+        ? (screenwidth + getExtraBoardGapColumns() + extraVisibleWidth)
+        : screenwidth;
+    const layoutScreenHeight = (!levelEditorOpened && extraDebugVisible)
+        ? Math.max(screenheight, extraVisibleHeight)
+        : screenheight;
 
     function recalcCellMetrics() {
-        cellwidth = canvas.width / screenwidth;
-        cellheight = (canvas.height - statusLineHeight) / screenheight;
+        cellwidth = canvas.width / layoutScreenWidth;
+        cellheight = (canvas.height - statusLineHeight) / layoutScreenHeight;
 
         // round the cell size as a multiple of sprite size
         let h = state.cell_height || state.sprite_size || 5;
@@ -7968,14 +8178,14 @@ function canvasResize(level) {
             if (nextEditorRows === editorRowCount)
                 break;
             editorRowCount = nextEditorRows;
-            screenheight = level.height + 2 + editorRowCount;
+            screenheight = editorBoardHeight + 2 + editorRowCount;
             recalcCellMetrics();
         }
     }
     
     // calculate an XY offset to position the board on the screen
-    xoffset = (canvas.width - cellwidth * screenwidth) / 2;
-    yoffset = (canvas.height - statusLineHeight - cellheight * screenheight) / 2;
+    xoffset = (canvas.width - cellwidth * layoutScreenWidth) / 2;
+    yoffset = (canvas.height - statusLineHeight - cellheight * layoutScreenHeight) / 2;
     if (levelEditorOpened && !textMode) {
     	xoffset+=cellwidth;
     	yoffset+=cellheight*(1+editorRowCount);
@@ -8071,7 +8281,8 @@ EasingFunctions = {
       11: "easeInQuint",
       12: "easeOutQuint",
       13: "easeInOutQuint"
-  }
+  }  
+
 </script>
 <script>
 /**
@@ -9503,6 +9714,7 @@ window.redraw3D = redraw3D;
 window.snapshotLevelState = snapshotLevelState;
 window.reset3DCamera = reset3DCamera;
 window.use3DRenderer = false;
+
 </script>
 <script>
 var onLevelRestarted = new Event("levelRestarted");
@@ -10911,6 +11123,7 @@ function level4Serialization() {
 		mainBoardHeight: curLevel.mainBoardHeight,
 		extraBoardWidth: curLevel.extraBoardWidth,
 		extraBoardHeight: curLevel.extraBoardHeight,
+		extraCellStates: deepClone(curLevel.extraCellStates || {}),
 		oldflickscreendat: oldflickscreendat.concat([]),
     	cameraPositionTarget: Object.assign({}, cameraPositionTarget),
 		levelNo: curLevelNo,
@@ -11185,6 +11398,7 @@ function unconsolidateDiff(before,after) {
 		mainBoardHeight: before.mainBoardHeight,
 		extraBoardWidth: before.extraBoardWidth,
 		extraBoardHeight: before.extraBoardHeight,
+		extraCellStates: deepClone(before.extraCellStates || {}),
 		oldflickscreendat: before.oldflickscreendat
 	}
 }
@@ -11253,6 +11467,7 @@ function restoreLevel(lev, snapCamera, resetTween = true, resetAutoTick = true) 
 		curLevel.extraBoardHeight = Math.max(1, Math.min(curLevel.height, extraHeight));
 		pruneObjectsOutsideBoardBounds(curLevel);
 	}
+	curLevel.extraCellStates = deepClone(lev.extraCellStates || {});
 
     if (lev.cameraPositionTarget) {
       	cameraPositionTarget = Object.assign({}, lev.cameraPositionTarget);
@@ -11350,6 +11565,7 @@ function consolidateDiff(before,after){
 		mainBoardHeight: before.mainBoardHeight,
 		extraBoardWidth: before.extraBoardWidth,
 		extraBoardHeight: before.extraBoardHeight,
+		extraCellStates: deepClone(before.extraCellStates || {}),
 		oldflickscreendat: before.oldflickscreendat,
 		metadata: before.metadata,
 	}
@@ -11712,6 +11928,7 @@ function Level(lineNumber, width, height, layerCount, objects, section) {
 	this.mainBoardHeight = height;
 	this.extraBoardWidth = 1;
 	this.extraBoardHeight = 1;
+	this.extraCellStates = {};
 }
 
 Level.prototype.delta_index = function(direction)
@@ -11727,6 +11944,7 @@ Level.prototype.clone = function() {
 	clone.mainBoardHeight = this.mainBoardHeight;
 	clone.extraBoardWidth = this.extraBoardWidth;
 	clone.extraBoardHeight = this.extraBoardHeight;
+	clone.extraCellStates = deepClone(this.extraCellStates || {});
 	return clone;
 }
 
@@ -12764,7 +12982,7 @@ Rule.prototype.tryApply = function(level) {
 	let commandRepeatCount = 1;
 	let commandTuples = null;
 	const hasMatchScopedCommands = this.commands && this.commands.some(cmd =>
-		cmd && (cmd[0] === 'border' || cmd[0] === 'extraborder'));
+		cmd && (cmd[0] === 'border' || cmd[0] === 'extraborder' || cmd[0] === 'savestate' || cmd[0] === 'loadstate'));
 
     var result=false;	
 	if (this.hasReplacements) {
@@ -12882,6 +13100,29 @@ function getExtraBoardBounds(level = curLevel) {
 	return { width, height };
 }
 
+function ensureExtraCellStates(level = curLevel) {
+	if (!level.extraCellStates || typeof level.extraCellStates !== 'object') {
+		level.extraCellStates = {};
+	}
+	return level.extraCellStates;
+}
+
+function getExtraCellKeyFromIndex(index, level = curLevel) {
+	if (!state || !state.extraBoardEnabled || !level || !isFinite(index) || isNaN(index)) {
+		return null;
+	}
+	const extraBounds = getExtraBoardBounds(level);
+	if (!extraBounds) {
+		return null;
+	}
+	const x = ((index / level.height) | 0);
+	const y = (index % level.height);
+	if (x < 0 || y < 0 || x >= extraBounds.width || y >= extraBounds.height) {
+		return null;
+	}
+	return `${x},${y}`;
+}
+
 function captureMainBoardState(level = curLevel) {
 	const mainBounds = getMainBoardBounds(level);
 	const baseMask = getBaseObjectMask();
@@ -12894,6 +13135,7 @@ function captureMainBoardState(level = curLevel) {
 		for (let y = 0; y < mainBounds.height; y++) {
 			const srcIndex = y + x * level.height;
 			const dstIndex = (y + x * mainBounds.height) * STRIDE_OBJ;
+			// getCell() returns a live view into level.objects, so clone before masking.
 			const cell = level.getCell(srcIndex).clone();
 			cell.iand(baseMask);
 			for (let w = 0; w < STRIDE_OBJ; w++) {
@@ -12907,6 +13149,129 @@ function captureMainBoardState(level = curLevel) {
 		height: mainBounds.height,
 		data: data
 	};
+}
+
+function applyMainBoardState(snapshot, level = curLevel) {
+	if (!snapshot || !level || !isFinite(snapshot.width) || !isFinite(snapshot.height) || !Array.isArray(snapshot.data)) {
+		return false;
+	}
+	const newMainWidth = Math.max(1, Math.floor(snapshot.width));
+	const newMainHeight = Math.max(1, Math.floor(snapshot.height));
+	const expectedLen = newMainWidth * newMainHeight * STRIDE_OBJ;
+	if (snapshot.data.length < expectedLen) {
+		return false;
+	}
+
+	const extraSnapshot = snapshotExtraBoard(level);
+	const extraBounds = getExtraBoardBounds(level) || { width: 1, height: 1 };
+	const newWidth = Math.max(newMainWidth, extraBounds.width);
+	const newHeight = Math.max(newMainHeight, extraBounds.height);
+
+	const newObjects = new Int32Array(newWidth * newHeight * STRIDE_OBJ);
+	const bgMask = new BitVec(STRIDE_OBJ);
+	bgMask.ibitset(state.backgroundid);
+	for (let i = 0; i < newWidth * newHeight; i++) {
+		for (let w = 0; w < STRIDE_OBJ; w++) {
+			newObjects[i * STRIDE_OBJ + w] = bgMask.data[w];
+		}
+	}
+
+	for (let x = 0; x < newMainWidth; x++) {
+		for (let y = 0; y < newMainHeight; y++) {
+			const srcIndex = (y + x * newMainHeight) * STRIDE_OBJ;
+			const dstIndex = (y + x * newHeight) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newObjects[dstIndex + w] = snapshot.data[srcIndex + w] | 0;
+			}
+		}
+	}
+
+	level.width = newWidth;
+	level.height = newHeight;
+	level.n_tiles = newWidth * newHeight;
+	level.objects = newObjects;
+	level.mainBoardWidth = newMainWidth;
+	level.mainBoardHeight = newMainHeight;
+
+	if (extraSnapshot) {
+		restoreExtraBoard(level, extraSnapshot);
+	} else {
+		clampExtraBoardBounds(level);
+	}
+	pruneObjectsOutsideBoardBounds(level);
+	RebuildLevelArrays();
+	calculateRowColMasks();
+	return true;
+}
+
+function runStateCellCommand(commandName, matchedTuples, rule) {
+	if (!state || !state.extraBoardEnabled || !Array.isArray(matchedTuples) || matchedTuples.length === 0) {
+		return 0;
+	}
+
+	const level = curLevel;
+	const extraBounds = getExtraBoardBounds(level);
+	const levelHeightAtMatch = level.height;
+	if (!extraBounds || levelHeightAtMatch <= 0) {
+		return 0;
+	}
+
+	const targetIndices = [];
+	for (const tuple of matchedTuples) {
+		if (!Array.isArray(tuple) || tuple.length === 0) {
+			continue;
+		}
+		const idx = tuple[0];
+		if (!isFinite(idx) || isNaN(idx)) {
+			continue;
+		}
+		targetIndices.push(idx | 0);
+	}
+	if (targetIndices.length === 0) {
+		return 0;
+	}
+
+	const store = ensureExtraCellStates(level);
+	const targetKeys = [];
+	for (const index of targetIndices) {
+		const x = ((index / levelHeightAtMatch) | 0);
+		const y = (index % levelHeightAtMatch);
+		if (x < 0 || y < 0 || x >= extraBounds.width || y >= extraBounds.height) {
+			continue;
+		}
+		targetKeys.push(`${x},${y}`);
+	}
+	if (targetKeys.length === 0) {
+		return 0;
+	}
+
+	let applied = 0;
+	for (const key of targetKeys) {
+		if (commandName === 'savestate') {
+			const snap = captureMainBoardState(level);
+			if (!snap) {
+				continue;
+			}
+			store[key] = snap;
+			applied++;
+		} else if (commandName === 'loadstate') {
+			const snap = store[key];
+			if (!snap) {
+				continue;
+			}
+			if (applyMainBoardState(snap, level)) {
+				applied++;
+			}
+		}
+	}
+
+	if (verbose_logging && rule) {
+		const inspect_ID = addToDebugTimeline(curLevel, rule.lineNumber);
+		const logString = htmlColor('green',
+			`Rule ${htmlJump(rule.lineNumber)} triggers command ${commandName} (${applied > 0 ? `applied x${applied}` : 'ignored'}).`);
+		consolePrint(logString, false, rule.lineNumber, inspect_ID);
+	}
+	return applied;
 }
 
 function getBaseObjectMask() {
@@ -12954,6 +13319,20 @@ function pruneObjectsOutsideBoardBounds(level = curLevel) {
 	level.mainBoardHeight = mainBounds.height;
 	level.extraBoardWidth = extraBounds.width;
 	level.extraBoardHeight = extraBounds.height;
+	const stateStore = ensureExtraCellStates(level);
+	for (const key of Object.keys(stateStore)) {
+		const parts = key.split(',');
+		if (parts.length !== 2) {
+			delete stateStore[key];
+			continue;
+		}
+		const x = parseInt(parts[0], 10);
+		const y = parseInt(parts[1], 10);
+		if (!isFinite(x) || isNaN(x) || !isFinite(y) || isNaN(y)
+			|| x < 0 || y < 0 || x >= extraBounds.width || y >= extraBounds.height) {
+			delete stateStore[key];
+		}
+	}
 
 	const baseMask = getBaseObjectMask();
 	const extraMask = getExtraObjectMask();
@@ -13032,6 +13411,7 @@ function snapshotExtraBoard(level = curLevel) {
 		for (let y = 0; y < bounds.height; y++) {
 			const srcIndex = y + x * level.height;
 			const dstIndex = (y + x * bounds.height) * STRIDE_OBJ;
+			// getCell() returns a live view into level.objects, so clone before masking.
 			const cell = level.getCell(srcIndex).clone();
 			cell.iand(extraMask);
 			for (let w = 0; w < STRIDE_OBJ; w++) {
@@ -13400,6 +13780,9 @@ Rule.prototype.queueCommands = function(repeatCount = 1, matchedTuples = null) {
 		} else if (command[0] == 'gosub') {			// gosub is not queued
 			gosubTarget = command[1];
 			continue;
+		} else if (command[0] == 'savestate' || command[0] == 'loadstate') {
+			runStateCellCommand(command[0], matchedTuples, this);
+			continue;
 		} else if (command[0] == 'border' || command[0] == 'extraborder') {
 			if (!state || !state.metadata || !state.metadata.runtime_border_twiddling) {
 				continue;
@@ -13579,7 +13962,7 @@ function applyRandomRuleGroup(level,ruleGroup) {
 	const delta = level.delta_index(rule.direction)
 	var modified = rule.applyAt(level,tuple,check,delta);
 
-    rule.queueCommands();
+    rule.queueCommands(1, [tuple]);
 
   return modified;
 }
@@ -14857,6 +15240,7 @@ function updateCameraPositionTarget() {
 function IsMouseGameInputEnabled() {
 	return state.metadata.mouse_left || state.metadata.mouse_up || state.metadata.mouse_drag || state.metadata.mouse_clicks;
 }
+
 </script>
 <script>
 /*
@@ -14890,13 +15274,13 @@ let errorCount = 0;         //only counts errors
 let caseSensitive = false;
 
 // used here and in compiler
-const reg_commandwords = /^(afx[\w:=+-.]+|sfx\d+|cancel|checkpoint|restart|win|message|again|undo|nosave|quit|border|extraborder|zoomscreen|flickscreen|smoothscreen|again_interval|realtime_interval|key_repeat_interval|noundo|norestart|background_color|text_color|goto|message_text_align|status|gosub|link|log|color_palette)$/i;
+const reg_commandwords = /^(afx[\w:=+-.]+|sfx\d+|cancel|checkpoint|restart|win|message|again|undo|nosave|quit|border|extraborder|savestate|loadstate|zoomscreen|flickscreen|smoothscreen|again_interval|realtime_interval|key_repeat_interval|noundo|norestart|background_color|text_color|goto|message_text_align|status|gosub|link|log|color_palette)$/i;
 const reg_name = /^[\p{L}\p{N}_$]+/u;
 const reg_objectname = /^[\p{L}\p{N}_$]+(:[\p{L}\p{N}_$]+)*/u;              // object name for definition
 const reg_objectnamerel = /^[\p{L}\p{N}_$]+(:[<>v^]|:[\p{L}\p{N}_$]+)*$/u;  // object name with relative parts for use in rules
 const reg_objmodi = /^(canvas|copy|flip|rot|scale|shift|text|translate):/i;
 
-const commandwords_table = ['cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'nosave', 'quit', 'border', 'extraborder', 'zoomscreen', 'flickscreen', 'smoothscreen', 
+const commandwords_table = ['cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'nosave', 'quit', 'border', 'extraborder', 'savestate', 'loadstate', 'zoomscreen', 'flickscreen', 'smoothscreen', 
     'again_interval', 'realtime_interval', 'key_repeat_interval', 'noundo', 'norestart', 'background_color', 'text_color', 'goto', 'message_text_align', 'status', 'gosub'
 ];
 const commandargs_table = ['message', 'goto', 'status', 'gosub', 'log', 'border', 'extraborder'];
@@ -15075,7 +15459,7 @@ var codeMirrorFn = function() {
         '|', '[', ']', 'up', 'down', 'left', 'right', 'late', 'rigid', '^', 'v', '>', '<', 'no', 'randomdir', 'random', 'horizontal', 'vertical',
         'any', 'all', 'no', 'some', 'moving', 'stationary', 'parallel', 'perpendicular', 'action', 'message', 'move', 
         'create', 'destroy', 'cantmove', 'sfx0', 'sfx1', 'sfx2', 'sfx3', 'Sfx4', 'sfx5', 'sfx6', 'sfx7', 'sfx8', 'sfx9', 'sfx10', 
-        'cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'restart', 'border', 'titlescreen', 'startgame', 'cancel', 'endgame', 
+        'cancel', 'checkpoint', 'restart', 'win', 'message', 'again', 'undo', 'restart', 'border', 'savestate', 'loadstate', 'titlescreen', 'startgame', 'cancel', 'endgame', 
         'startlevel', 'endlevel', 'showmessage', 'closemessage' ];
     const prelude_keywords = ['allow_undo_level', 'auto_level_titles', 'case_sensitive', 'continue_is_level_select', 'debug', 'enable_pause', 
         'level_select', 'level_select_lock', 
@@ -17114,8 +17498,10 @@ var codeMirrorFn = function() {
 };
 
 window.CodeMirror.defineMode('puzzle', codeMirrorFn);
+
 </script>
 <script>
+
 'use strict';
 
 // static data used here and elsewhere
@@ -19226,6 +19612,30 @@ var rule_line = {
     isOnce: isOnce,
     prefixes: prefixes,
 };
+
+    const hasBoardStateCommand = commands.some(c => c[0] === 'savestate' || c[0] === 'loadstate');
+    if (hasBoardStateCommand) {
+        if (!state.extraBoardEnabled) {
+            logError('SAVESTATE/LOADSTATE commands require the EXTRA_BOARD prelude flag.', lineNumber);
+        }
+        let concreteCellCount = 0;
+        let hasEllipsis = false;
+        for (const row of lhs_cells) {
+            for (const cell of row) {
+                if (!Array.isArray(cell)) {
+                    continue;
+                }
+                if (cell[0] === '...' || cell.includes('...')) {
+                    hasEllipsis = true;
+                    continue;
+                }
+                concreteCellCount++;
+            }
+        }
+        if (hasEllipsis || concreteCellCount !== 1) {
+            logError('SAVESTATE/LOADSTATE can only be used in rules that match exactly one concrete cell.', lineNumber);
+        }
+    }
 
     if (directionalRule(rule_line) === false && rule_line.directions.length>1) {
         rule_line.directions.splice(1);
@@ -21791,6 +22201,7 @@ function isSitelocked() {
 
     return true;
 }
+
 </script>
 <script>
 var keyRepeatTimer=0;
@@ -21942,6 +22353,188 @@ function removeBottomRow(){
 	}
 }
 
+function getEditorBoardLayoutSafe() {
+	if (typeof getEditorBoardLayout === 'function') {
+		return getEditorBoardLayout(curLevel);
+	}
+	return null;
+}
+
+function getEditorBoardCellTarget(mx, my) {
+	const layout = getEditorBoardLayoutSafe();
+	if (!layout) {
+		if (mx >= 0 && my >= 0 && mx < screenwidth - 2 && my < screenheight - 2 - editorRowCount) {
+			return {
+				kind: 'main',
+				levelX: mx,
+				levelY: my
+			};
+		}
+		return null;
+	}
+
+	const boards = [layout.main, layout.extra].filter(Boolean);
+	for (const board of boards) {
+		if (mx >= board.x0 && mx <= board.x1 && my >= board.y0 && my <= board.y1) {
+			return {
+				kind: board.kind,
+				levelX: mx - board.x0,
+				levelY: my - board.y0
+			};
+		}
+	}
+	return null;
+}
+
+function getEditorResizeTarget(mx, my) {
+	const layout = getEditorBoardLayoutSafe();
+	if (!layout) {
+		if (mx === -1) return { kind: 'main', direction: 'left' };
+		if (mx === screenwidth - 2) return { kind: 'main', direction: 'right' };
+		if (my === -1) return { kind: 'main', direction: 'up' };
+		if (my === screenheight - 2 - editorRowCount) return { kind: 'main', direction: 'down' };
+		return null;
+	}
+
+	const boards = [layout.main, layout.extra].filter(Boolean);
+	for (const board of boards) {
+		const onLeft = (mx === board.leftHandle) && (my >= board.topHandle && my <= board.bottomHandle);
+		if (onLeft) return { kind: board.kind, direction: 'left' };
+		const onRight = (mx === board.rightHandle) && (my >= board.topHandle && my <= board.bottomHandle);
+		if (onRight) return { kind: board.kind, direction: 'right' };
+		const onTop = (my === board.topHandle) && (mx >= board.leftHandle && mx <= board.rightHandle);
+		if (onTop) return { kind: board.kind, direction: 'up' };
+		const onBottom = (my === board.bottomHandle) && (mx >= board.leftHandle && mx <= board.rightHandle);
+		if (onBottom) return { kind: board.kind, direction: 'down' };
+	}
+
+	return null;
+}
+
+function applyExtraBoardResizeEditor(direction, amount) {
+	if (typeof applyExtraBorderResize === 'function') {
+		return applyExtraBorderResize(direction, amount);
+	}
+	if (!state || !state.extraBoardEnabled || !curLevel) {
+		return false;
+	}
+	if (typeof getExtraBoardBounds !== 'function' || typeof getMainBoardBounds !== 'function'
+		|| typeof snapshotExtraBoard !== 'function' || typeof captureMainBoardState !== 'function'
+		|| typeof normalizeBorderAmount !== 'function') {
+		return false;
+	}
+
+	const mainBounds = getMainBoardBounds(curLevel);
+	const extraBounds = getExtraBoardBounds(curLevel);
+	if (!mainBounds || !extraBounds) {
+		return false;
+	}
+
+	const effectiveAmount = normalizeBorderAmount(direction, amount, extraBounds.width, extraBounds.height);
+	if (effectiveAmount === 0) {
+		return false;
+	}
+
+	const newExtraWidth = extraBounds.width + ((direction === 'left' || direction === 'right') ? effectiveAmount : 0);
+	const newExtraHeight = extraBounds.height + ((direction === 'up' || direction === 'down') ? effectiveAmount : 0);
+	if (newExtraWidth <= 0 || newExtraHeight <= 0) {
+		return false;
+	}
+
+	const newWidth = Math.max(mainBounds.width, newExtraWidth);
+	const newHeight = Math.max(mainBounds.height, newExtraHeight);
+	const mainSnapshot = captureMainBoardState(curLevel);
+	const oldExtra = snapshotExtraBoard(curLevel);
+	if (!mainSnapshot) {
+		return false;
+	}
+
+	const extraBgMask = new BitVec(STRIDE_OBJ);
+	if (state.extraBackgroundid !== undefined) {
+		extraBgMask.ibitset(state.extraBackgroundid);
+	}
+	const newExtraData = new Int32Array(newExtraWidth * newExtraHeight * STRIDE_OBJ);
+	for (let i = 0; i < newExtraWidth * newExtraHeight; i++) {
+		for (let w = 0; w < STRIDE_OBJ; w++) {
+			newExtraData[i * STRIDE_OBJ + w] = extraBgMask.data[w];
+		}
+	}
+
+	const xShift = (direction === 'left') ? effectiveAmount : 0;
+	const yShift = (direction === 'up') ? effectiveAmount : 0;
+	if (oldExtra) {
+		for (let x = 0; x < oldExtra.width; x++) {
+			for (let y = 0; y < oldExtra.height; y++) {
+				const nx = x + xShift;
+				const ny = y + yShift;
+				if (nx < 0 || ny < 0 || nx >= newExtraWidth || ny >= newExtraHeight) {
+					continue;
+				}
+				const srcIndex = (y + x * oldExtra.height) * STRIDE_OBJ;
+				const dstIndex = (ny + nx * newExtraHeight) * STRIDE_OBJ;
+				for (let w = 0; w < STRIDE_OBJ; w++) {
+					newExtraData[dstIndex + w] = oldExtra.data[srcIndex + w];
+				}
+			}
+		}
+	}
+
+	const mainBgMask = new BitVec(STRIDE_OBJ);
+	mainBgMask.ibitset(state.backgroundid);
+	const newObjects = new Int32Array(newWidth * newHeight * STRIDE_OBJ);
+	for (let i = 0; i < newWidth * newHeight; i++) {
+		for (let w = 0; w < STRIDE_OBJ; w++) {
+			newObjects[i * STRIDE_OBJ + w] = mainBgMask.data[w];
+		}
+	}
+
+	for (let x = 0; x < mainSnapshot.width; x++) {
+		for (let y = 0; y < mainSnapshot.height; y++) {
+			const srcIndex = (y + x * mainSnapshot.height) * STRIDE_OBJ;
+			const dstIndex = (y + x * newHeight) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newObjects[dstIndex + w] = mainSnapshot.data[srcIndex + w] | 0;
+			}
+		}
+	}
+
+	for (let x = 0; x < newExtraWidth; x++) {
+		for (let y = 0; y < newExtraHeight; y++) {
+			const srcIndex = (y + x * newExtraHeight) * STRIDE_OBJ;
+			const dstIndex = (y + x * newHeight) * STRIDE_OBJ;
+			for (let w = 0; w < STRIDE_OBJ; w++) {
+				newObjects[dstIndex + w] |= newExtraData[srcIndex + w];
+			}
+		}
+	}
+
+	curLevel.width = newWidth;
+	curLevel.height = newHeight;
+	curLevel.n_tiles = newWidth * newHeight;
+	curLevel.objects = newObjects;
+	curLevel.mainBoardWidth = mainBounds.width;
+	curLevel.mainBoardHeight = mainBounds.height;
+	curLevel.extraBoardWidth = newExtraWidth;
+	curLevel.extraBoardHeight = newExtraHeight;
+
+	if (typeof pruneObjectsOutsideBoardBounds === 'function') {
+		pruneObjectsOutsideBoardBounds(curLevel);
+	}
+	RebuildLevelArrays();
+	calculateRowColMasks();
+	return true;
+}
+
+function resizeEditorBoard(kind, direction, amount) {
+	if (kind === 'extra') {
+		return applyExtraBoardResizeEditor(direction, amount);
+	}
+	if (typeof applyBorderResize === 'function') {
+		return applyBorderResize(direction, amount);
+	}
+	return false;
+}
+
 function matchGlyph(inputmask,glyphAndMask) {
 	// find mask with closest match
 	var highestbitcount=-1;
@@ -21994,6 +22587,23 @@ function printLevel() {
 	var backgroundGlyph = '.';
 	var warnedApprox = false;
 	var warnedNoBackgroundGlyph = false;
+	var extraBoardEnabled = !!(state && state.extraBoardEnabled);
+	var baseIdByExtraId = (state && state.baseIdByExtraId) ? state.baseIdByExtraId : null;
+	var extraMask = null;
+	if (extraBoardEnabled && state.extraIdByBaseId) {
+		extraMask = new BitVec(STRIDE_OBJ);
+		for (var baseIdText in state.extraIdByBaseId) {
+			if (!state.extraIdByBaseId.hasOwnProperty(baseIdText))
+				continue;
+			var eid = state.extraIdByBaseId[baseIdText];
+			if (eid !== undefined) {
+				extraMask.ibitset(eid);
+			}
+		}
+		if (extraMask.iszero()) {
+			extraMask = null;
+		}
+	}
 
 	function bitVecKey(vec) {
 		return Array.from(vec.data).join(',');
@@ -22095,6 +22705,86 @@ function printLevel() {
 		return parts;
 	}
 
+	function clampDim(value, fallback, max) {
+		var v = isFinite(value) ? Math.floor(value) : fallback;
+		if (!isFinite(v) || isNaN(v)) {
+			v = fallback;
+		}
+		if (v < 1) {
+			v = 1;
+		}
+		if (v > max) {
+			v = max;
+		}
+		return v;
+	}
+
+	function getMainExportBounds() {
+		if (!extraBoardEnabled) {
+			return { width: curLevel.width, height: curLevel.height };
+		}
+		return {
+			width: clampDim(curLevel.mainBoardWidth, curLevel.width, curLevel.width),
+			height: clampDim(curLevel.mainBoardHeight, curLevel.height, curLevel.height)
+		};
+	}
+
+	function getExtraExportBounds() {
+		if (!extraBoardEnabled) {
+			return null;
+		}
+		return {
+			width: clampDim(curLevel.extraBoardWidth, 1, curLevel.width),
+			height: clampDim(curLevel.extraBoardHeight, 1, curLevel.height)
+		};
+	}
+
+	function getExportCellMask(x, y, boardKind) {
+		var idx = y + x * curLevel.height;
+		var source = curLevel.getCell(idx).clone();
+		if (!extraBoardEnabled) {
+			return source;
+		}
+
+		if (boardKind === 'main') {
+			if (extraMask) {
+				source.iclear(extraMask);
+			}
+			return source;
+		}
+
+		var mapped = new BitVec(STRIDE_OBJ);
+		for (var objId = 0; objId < state.objectCount; objId++) {
+			if (!source.get(objId)) {
+				continue;
+			}
+			if (baseIdByExtraId && baseIdByExtraId[objId] !== undefined) {
+				mapped.ibitset(baseIdByExtraId[objId]);
+			}
+		}
+		return mapped;
+	}
+
+	function computeBoardLayers(width, height, boardKind) {
+		var perCellLayers = [];
+		var maxLayerCount = 1;
+		for (var y = 0; y < height; y++) {
+			for (var x = 0; x < width; x++) {
+				var cellIndex = y + x * height;
+				var cellMask = getExportCellMask(x, y, boardKind);
+				var parts = decomposeCell(cellMask);
+				perCellLayers[cellIndex] = parts;
+				if (parts.length > maxLayerCount) {
+					maxLayerCount = parts.length;
+				}
+			}
+		}
+		return {
+			perCellLayers: perCellLayers,
+			maxLayerCount: maxLayerCount
+		};
+	}
+
 	for (var glyphName in state.glyphDict) {
 		if (state.glyphDict.hasOwnProperty(glyphName)&&glyphName.length===1) {
 			var glyph = state.glyphDict[glyphName];
@@ -22140,41 +22830,50 @@ function printLevel() {
 		}
 	}
 
-	var perCellLayers = [];
-	var maxLayerCount = 1;
-	for (var y = 0; y < curLevel.height; y++) {
-		for (var x = 0; x < curLevel.width; x++) {
-			var cellIndex = y + x * curLevel.height;
-			var cellMask = curLevel.getCell(cellIndex);
-			var parts = decomposeCell(cellMask);
-			perCellLayers[cellIndex] = parts;
-			if (parts.length > maxLayerCount)
-				maxLayerCount = parts.length;
-		}
-	}
-
 	selectableint++;
 	var tag = 'selectable'+selectableint;
 	var output="Printing level contents:<br><br><span id=\""+tag+"\" onclick=\"selectText('"+tag+"',event)\"><br>";
 	cache_console_messages = false;
-	for (var layerIndex = 0; layerIndex < maxLayerCount; layerIndex++) {
-		for (var j=0;j<curLevel.height;j++) {
-			for (var i=0;i<curLevel.width;i++) {
-				var cIndex = j + i * curLevel.height;
-				var glyph = perCellLayers[cIndex][layerIndex] || backgroundGlyph;
-				if (glyph in htmlEntityMap) {
-					glyph = htmlEntityMap[glyph]; 
-				}
-				output = output + glyph;
-			}
-			if (j < curLevel.height - 1 || layerIndex < maxLayerCount - 1) {
-				output = output + "<br>";
-			}
+
+	var firstLine = true;
+	function appendLine(line) {
+		if (!firstLine) {
+			output += "<br>";
 		}
-		if (layerIndex < maxLayerCount - 1) {
-			output = output + "layer<br>";
+		output += line;
+		firstLine = false;
+	}
+
+	function appendBoard(boardKind, bounds) {
+		var board = computeBoardLayers(bounds.width, bounds.height, boardKind);
+		for (var layerIndex = 0; layerIndex < board.maxLayerCount; layerIndex++) {
+			for (var y = 0; y < bounds.height; y++) {
+				var row = "";
+				for (var x = 0; x < bounds.width; x++) {
+					var cIndex = y + x * bounds.height;
+					var glyph = board.perCellLayers[cIndex][layerIndex] || backgroundGlyph;
+					if (glyph in htmlEntityMap) {
+						glyph = htmlEntityMap[glyph];
+					}
+					row += glyph;
+				}
+				appendLine(row);
+			}
+			if (layerIndex < board.maxLayerCount - 1) {
+				appendLine("layer");
+			}
 		}
 	}
+
+	var mainBounds = getMainExportBounds();
+	appendBoard('main', mainBounds);
+
+	var extraBounds = getExtraExportBounds();
+	if (extraBounds) {
+		appendLine("extra");
+		appendBoard('extra', extraBounds);
+	}
+
 	output+="</span><br><br>"
 	consolePrint(output,true);
 }
@@ -22194,25 +22893,40 @@ function levelEditorClick(event,click) {
 			redraw();
 		}
 
-	} else if (mouseCoordX>-1&&mouseCoordY>-1&&mouseCoordX<screenwidth-2&&mouseCoordY<screenheight-2-editorRowCount	) {
+	} else {
+		const target = getEditorBoardCellTarget(mouseCoordX, mouseCoordY);
+		if (target) {
 		var glyphname = glyphImagesCorrespondance[glyphSelectedIndex];
 		var glyph = state.glyphDict[glyphname];
-		var backgroundMask = state.layerMasks[state.backgroundlayer];
-
-		var coordIndex = mouseCoordY + mouseCoordX*curLevel.height;
+		let backgroundMask = state.layerMasks[state.backgroundlayer];
+		let backgroundId = state.backgroundid;
+		var coordIndex = target.levelY + target.levelX*curLevel.height;
 		var oldCell = curLevel.getCell(coordIndex);
 		var newCell = oldCell.clone();
 		for (var layerIndex = 0; layerIndex < glyph.length; layerIndex++) {
 			var id = glyph[layerIndex];
 			if (id >= 0) {
-				newCell.iclear(state.layerMasks[layerIndex]);
-				newCell.ibitset(id);
+				var targetId = id;
+				if (target.kind === 'extra' && state.extraIdByBaseId && state.extraIdByBaseId[id] !== undefined) {
+					targetId = state.extraIdByBaseId[id];
+				}
+				var targetName = state.idDict[targetId];
+				if (!targetName || !state.objects[targetName]) {
+					continue;
+				}
+				var targetLayer = state.objects[targetName].layer;
+				newCell.iclear(state.layerMasks[targetLayer]);
+				newCell.ibitset(targetId);
 			}
+		}
+		if (target.kind === 'extra' && state.extraBackgroundlayer !== undefined && state.extraBackgroundid !== undefined) {
+			backgroundMask = state.layerMasks[state.extraBackgroundlayer];
+			backgroundId = state.extraBackgroundid;
 		}
 		if (newCell.bitsClearInArray(backgroundMask.data)) {
 			// If we don't already have a background layer, mix in
 			// the default one.
-			newCell.ibitset(state.backgroundid);
+			newCell.ibitset(backgroundId);
 		}
 
 		if (oldCell.equals(newCell)) {
@@ -22225,23 +22939,12 @@ function levelEditorClick(event,click) {
 			curLevel.setCell(coordIndex, newCell);
 			redraw();
 		}
-	}
-	else if (click) {
-		if (mouseCoordX===-1) {
-			//add a left row to the map
-			addLeftColumn();			
-			canvasResize();
-		} else if (mouseCoordX===screenwidth-2) {
-			addRightColumn();
-			canvasResize();
-		} 
-		if (mouseCoordY===-1) {
-			addTopRow();
-			canvasResize();
-		} else if (mouseCoordY===screenheight-2-editorRowCount) {
-			addBottomRow();
+	} else if (click) {
+		const resizeTarget = getEditorResizeTarget(mouseCoordX, mouseCoordY);
+		if (resizeTarget && resizeEditorBoard(resizeTarget.kind, resizeTarget.direction, 1)) {
 			canvasResize();
 		}
+	}
 	}
 }
 
@@ -22255,28 +22958,35 @@ function levelEditorRightClick(event,click) {
 			glyphSelectedIndex=glyphIndex;
 			redraw();
 		}
-	} else if (mouseCoordX>-1&&mouseCoordY>-1&&mouseCoordX<screenwidth-2&&mouseCoordY<screenheight-2-editorRowCount	) {
-		var coordIndex = mouseCoordY + mouseCoordX*curLevel.height;
-		var glyphmask = new BitVec(STRIDE_OBJ);
-		glyphmask.ibitset(state.backgroundid);
-		curLevel.setCell(coordIndex, glyphmask);
-		redraw();
-	}
-	else if (click) {
-		if (mouseCoordX===-1) {
-			//add a left row to the map
-			removeLeftColumn();			
-			canvasResize();
-		} else if (mouseCoordX===screenwidth-2) {
-			removeRightColumn();
-			canvasResize();
-		} 
-		if (mouseCoordY===-1) {
-			removeTopRow();
-			canvasResize();
-		} else if (mouseCoordY===screenheight-2-editorRowCount) {
-			removeBottomRow();
-			canvasResize();
+	} else {
+		const target = getEditorBoardCellTarget(mouseCoordX, mouseCoordY);
+		if (target) {
+			var coordIndex = target.levelY + target.levelX*curLevel.height;
+			var oldCell = curLevel.getCell(coordIndex);
+			var newCell = oldCell.clone();
+			if (target.kind === 'extra' && state.extraBaseLayerCount !== undefined) {
+				for (var layer = state.extraBaseLayerCount; layer < state.layerMasks.length; layer++) {
+					newCell.iclear(state.layerMasks[layer]);
+				}
+				if (state.extraBackgroundid !== undefined) {
+					newCell.ibitset(state.extraBackgroundid);
+				}
+			} else {
+				var mainLayerLimit = state.extraBoardEnabled && state.extraBaseLayerCount !== undefined
+					? state.extraBaseLayerCount
+					: state.layerMasks.length;
+				for (var layer = 0; layer < mainLayerLimit; layer++) {
+					newCell.iclear(state.layerMasks[layer]);
+				}
+				newCell.ibitset(state.backgroundid);
+			}
+			curLevel.setCell(coordIndex, newCell);
+			redraw();
+		} else if (click) {
+			const resizeTarget = getEditorResizeTarget(mouseCoordX, mouseCoordY);
+			if (resizeTarget && resizeEditorBoard(resizeTarget.kind, resizeTarget.direction, -1)) {
+				canvasResize();
+			}
 		}
 	}
 }
@@ -23187,6 +23897,10 @@ function checkKey(e,justPressed) {
         }
         case 82://r
         {
+        	if (!textMode && justPressed && !againing && !suppressInput && actionKeyInput(e.keyCode)) {
+				pushInput(`actionkey,${e.keyCode}`);
+				return prevent(e);
+			}
         	if (!textMode) {
         		if (justPressed) {
 	        		pushInput("restart");
@@ -23551,6 +24265,7 @@ var loop = function(timestamp){
 }
 
 window.requestAnimationFrame(loop);
+
 </script>
 <script>
 /*

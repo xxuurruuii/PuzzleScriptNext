@@ -12,8 +12,8 @@
 var standalone_HTML_String="";
 
 var clientStandaloneRequest = new XMLHttpRequest();
-
-clientStandaloneRequest.open('GET', 'standalone_inlined.txt');
+const standaloneTemplateUrl = 'standalone_inlined.txt?v=' + Date.now().toString();
+clientStandaloneRequest.open('GET', standaloneTemplateUrl);
 clientStandaloneRequest.onreadystatechange = function() {
 
 		if(clientStandaloneRequest.readyState!=4) {
