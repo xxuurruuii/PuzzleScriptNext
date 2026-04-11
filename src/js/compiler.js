@@ -1241,8 +1241,10 @@ function levelsToArray(state) {
     let hiddenLevelExplicit = false;
     let expectLayerGrid = false;
     let expectLayerLine = null;
+    let expectLayerScope = null;
     let expectExtraGrid = false;
     let expectExtraLine = null;
+    let lastGridScope = null;
     const layerObjectIds = state.collisionLayers.map(layer => layer.map(name => state.objects[name].id));
 
     const isGridLevel = level => level instanceof Level;
@@ -1404,6 +1406,59 @@ function levelsToArray(state) {
         }
         return true;
     }
+
+    function mergeExtraLevelLayer(baseLevel, overlayLevel, lineNumber) {
+        if (!state.extraBoardEnabled) {
+            logError("LAYER on EXTRA map requires the EXTRA_BOARD prelude flag.", lineNumber);
+            return false;
+        }
+
+        const widthRaw = isFinite(baseLevel.extraBoardWidth) ? Math.floor(baseLevel.extraBoardWidth) : 1;
+        const heightRaw = isFinite(baseLevel.extraBoardHeight) ? Math.floor(baseLevel.extraBoardHeight) : 1;
+        const expectedWidth = Math.max(1, Math.min(baseLevel.width, widthRaw));
+        const expectedHeight = Math.max(1, Math.min(baseLevel.height, heightRaw));
+        if (overlayLevel.width !== expectedWidth || overlayLevel.height !== expectedHeight) {
+            logError(`LAYER map size mismatch for EXTRA board. Expected ${expectedWidth}x${expectedHeight}, got ${overlayLevel.width}x${overlayLevel.height}.`, lineNumber);
+            return false;
+        }
+
+        const startLayer = state.extraBaseLayerCount || 0;
+        const extraBackgroundId = state.extraBackgroundid;
+        for (let x = 0; x < expectedWidth; x++) {
+            for (let y = 0; y < expectedHeight; y++) {
+                const baseIndex = y + x * baseLevel.height;
+                const overlayIndex = y + x * overlayLevel.height;
+                const baseCell = baseLevel.getCell(baseIndex);
+                const overlayCell = overlayLevel.getCell(overlayIndex);
+
+                for (let layerIndex = startLayer; layerIndex < state.layerMasks.length; layerIndex++) {
+                    const baseId = getObjectOnLayer(baseCell, layerIndex);
+                    const overlayId = getObjectOnLayer(overlayCell, layerIndex);
+                    if (overlayId === -1 || overlayId === baseId) {
+                        continue;
+                    }
+
+                    const overlayIsBg = (extraBackgroundId !== undefined && overlayId === extraBackgroundId);
+                    const baseIsBg = (extraBackgroundId !== undefined && baseId === extraBackgroundId);
+                    if (overlayIsBg && baseId !== -1 && !baseIsBg) {
+                        continue;
+                    }
+
+                    if (baseId !== -1 && !baseIsBg && !overlayIsBg) {
+                        const baseName = errorCase(state.idDict[baseId]);
+                        const overlayName = errorCase(state.idDict[overlayId]);
+                        logError(`LAYER conflict at EXTRA map cell (${x + 1},${y + 1}): "${overlayName}" overlaps "${baseName}" on the same collision layer.`, lineNumber);
+                        return false;
+                    }
+
+                    baseCell.iclear(state.layerMasks[layerIndex]);
+                    baseCell.ibitset(overlayId);
+                }
+                baseLevel.setCell(baseIndex, baseCell);
+            }
+        }
+        return true;
+    }
     
     if (state.levels.at(-1).length == 0)
         state.levels.pop();
@@ -1417,6 +1472,7 @@ function levelsToArray(state) {
             logError('LAYER must be followed immediately by map rows.', level[2]);
             expectLayerGrid = false;
             expectLayerLine = null;
+            expectLayerScope = null;
         }
         if (typeof level[0] === 'string' && level[0] !== 'extra' && expectExtraGrid) {
             logError('EXTRA must be followed immediately by map rows.', level[2]);
@@ -1471,6 +1527,7 @@ function levelsToArray(state) {
             } else {
                 expectLayerGrid = true;
                 expectLayerLine = level[2];
+                expectLayerScope = (state.extraBoardEnabled && lastGridScope === 'extra') ? 'extra' : 'main';
             }
 		} else if (level[0] == 'extra') {
             if (level[1] && level[1].trim().length > 0)
@@ -1489,9 +1546,13 @@ function levelsToArray(state) {
             if (gotoFlag && links.length == 0) 
                 logWarning('Level unreachable due to previous GOTO.', level[0]);
             level[1] = section; // todo: fix it
-            const compiledLevel = levelFromString(state, level, expectExtraGrid);
+            const compileAsExtraBoard = expectExtraGrid || (expectLayerGrid && expectLayerScope === 'extra');
+            const compiledLevel = levelFromString(state, level, compileAsExtraBoard);
             if (expectLayerGrid && isGridLevel(levels.at(-1))) {
-                if (!mergeLevelLayer(levels.at(-1), compiledLevel, level[0])) {
+                const merged = (expectLayerScope === 'extra')
+                    ? mergeExtraLevelLayer(levels.at(-1), compiledLevel, level[0])
+                    : mergeLevelLayer(levels.at(-1), compiledLevel, level[0]);
+                if (!merged) {
                     levels.push(compiledLevel);
                     levels.at(-1).title = title;
                     levels.at(-1).isLabeledLevel = !!hiddenLevelExplicit;
@@ -1500,13 +1561,18 @@ function levelsToArray(state) {
                     ++levelNo;
                     title = null;
                     hiddenLevelExplicit = false;
+                    lastGridScope = 'main';
+                } else {
+                    lastGridScope = (expectLayerScope === 'extra') ? 'extra' : 'main';
                 }
                 expectLayerGrid = false;
                 expectLayerLine = null;
+                expectLayerScope = null;
             } else if (expectExtraGrid && isGridLevel(levels.at(-1))) {
                 mergeExtraLevel(levels.at(-1), compiledLevel, level[0]);
                 expectExtraGrid = false;
                 expectExtraLine = null;
+                lastGridScope = 'extra';
             } else {
                 if (state.extraBoardEnabled) {
                     initExtraBoard(compiledLevel);
@@ -1519,6 +1585,7 @@ function levelsToArray(state) {
                 ++levelNo;
                 title = null;
                 hiddenLevelExplicit = false;
+                lastGridScope = 'main';
             }
 		}
 	});
