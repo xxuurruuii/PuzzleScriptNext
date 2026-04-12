@@ -325,6 +325,7 @@ function is3DInteractionEnabled() {
 
 function render3DSceneNow() {
     if (!renderer3d || !scene3d || !camera3d) return;
+    sync3DViewport(false);
     renderer3d.render(scene3d, camera3d);
 }
 
@@ -1067,7 +1068,7 @@ function animate3D() {
     }
 
     // Render the scene
-    renderer3d.render(scene3d, camera3d);
+    render3DSceneNow();
 
     if (t < 1) {
         animationFrameId = requestAnimationFrame(animate3D);
@@ -1228,7 +1229,7 @@ function redraw3D() {
 
     // Get current level data
     if (!curLevel || !curLevel.width || !curLevel.height) {
-        renderer3d.render(scene3d, camera3d);
+        render3DSceneNow();
         return true;
     }
 
@@ -1405,7 +1406,7 @@ function redraw3D() {
         animate3D();
     } else {
         // No animation, just render once
-        renderer3d.render(scene3d, camera3d);
+        render3DSceneNow();
     }
 
     return true;
