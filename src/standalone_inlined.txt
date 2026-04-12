@@ -17956,10 +17956,12 @@ function generateExtraMembers(state) {
         state.extraBaseObjectNames = baseObjectNames.slice();
         state.extraBaseLayerCount = baseLayerCount;
         state.extraNameMap = state.extraNameMap || {};
+        state.baseNameByExtraName = state.baseNameByExtraName || {};
 
         for (const baseName of baseObjectNames) {
             const extraName = toExtraObjectName(baseName);
             state.extraNameMap[baseName] = extraName;
+            state.baseNameByExtraName[extraName] = baseName;
             if (!(extraName in state.objects)) {
                 state.objects[extraName] = deepClone(state.objects[baseName]);
             }
@@ -17975,6 +17977,7 @@ function generateExtraMembers(state) {
                 cloned.lineNumber = entry.lineNumber;
                 clones.push(cloned);
                 state.extraNameMap[entry[0]] = cloned[0];
+                state.baseNameByExtraName[cloned[0]] = entry[0];
             }
             list.push(...clones);
         }
@@ -20163,6 +20166,42 @@ function expandNoPrefixedProperties(state, cell) {
 }
 
 function concretizePropertyRule(state, rule, lineNumber) {
+    const getBaseLegendName = name =>
+        (state.baseNameByExtraName && state.baseNameByExtraName[name]) || name;
+    const getTwinLegendName = name => {
+        if (state.extraNameMap && state.extraNameMap[name]) {
+            return state.extraNameMap[name];
+        }
+        if (state.baseNameByExtraName && state.baseNameByExtraName[name]) {
+            return state.baseNameByExtraName[name];
+        }
+        return null;
+    };
+    const mapConcreteTypeForProperty = (targetProperty, concreteType) => {
+        if (!(concreteType in state.objects)) {
+            return concreteType;
+        }
+        const targetIsExtra = !!(state.baseNameByExtraName && state.baseNameByExtraName[targetProperty]);
+        const concreteIsExtra = !!(state.baseNameByExtraName && state.baseNameByExtraName[concreteType]);
+        if (targetIsExtra && !concreteIsExtra) {
+            return (state.extraNameMap && state.extraNameMap[concreteType]) || concreteType;
+        }
+        if (!targetIsExtra && concreteIsExtra) {
+            return (state.baseNameByExtraName && state.baseNameByExtraName[concreteType]) || concreteType;
+        }
+        return concreteType;
+    };
+    const concretizeEquivalentPropertiesInCell = (cell, property, concreteType) => {
+        const names = [property];
+        const twin = getTwinLegendName(property);
+        if (twin && !names.includes(twin)) {
+            names.push(twin);
+        }
+        for (const name of names) {
+            const mappedConcrete = mapConcreteTypeForProperty(name, concreteType);
+            concretizePropertyInCell(cell, name, mappedConcrete);
+        }
+    };
 
     //step 1, rephrase rule to change "no flying" to "no cat no bat"
     for (var i = 0; i < rule.lhs.length; i++) {
@@ -20183,26 +20222,35 @@ function concretizePropertyRule(state, rule, lineNumber) {
     // we can't manage this if they're being used to disambiguate
 
     const ambiguousProperties = {};
-    const mappingProperties_l = [];
-    const mappingProperties_r = [];
+    const rawMappingProperties_l = [];
+    const rawMappingProperties_r = [];
 
     for (let j = 0; j < rule.rhs.length; j++) {
         const row_l = rule.lhs[j];
         const row_r = rule.rhs[j];
         for (let k = 0; k < row_r.length; k++) {
             const properties_l = getPropertiesFromCell(state, row_l[k]);
+            const canonical_l = properties_l.map(getBaseLegendName);
             const properties_r = getPropertiesFromCell(state, row_r[k]);
 
             for (let prop_n = 0; prop_n < properties_r.length; prop_n++) {
                 const property = properties_r[prop_n];
-                if (!properties_l.includes(property)) {
+                if (!canonical_l.includes(getBaseLegendName(property))) {
                     ambiguousProperties[property] = true;
                 }
             }
-            properties_l.forEach(value => mappingProperties_l.push(value));
-            properties_r.forEach(value => mappingProperties_r.push(value));
+            properties_l.forEach(value => rawMappingProperties_l.push(value));
+            properties_r.forEach(value => rawMappingProperties_r.push(value));
         }
     }
+
+    const canonicalOnLeft = new Set(rawMappingProperties_l.map(getBaseLegendName));
+    const canonicalOnRight = new Set(rawMappingProperties_r.map(getBaseLegendName));
+    const sharedCanonical = new Set([...canonicalOnLeft].filter(name => canonicalOnRight.has(name)));
+    const mappingProperties_l = rawMappingProperties_l.filter(p => !sharedCanonical.has(getBaseLegendName(p)));
+    const mappingProperties_r = rawMappingProperties_r.filter(p => !sharedCanonical.has(getBaseLegendName(p)));
+    const mappingPropertySetL = new Set(mappingProperties_l);
+    const mappingPropertySetR = new Set(mappingProperties_r);
 
     // PS> do we have properties on both sides, all of the same length, left all different from right?
     let result = [rule];
@@ -20223,11 +20271,14 @@ function concretizePropertyRule(state, rule, lineNumber) {
             newRules.push(deepCloneRule(oldRule));
         //const newRules = (new Array(numprops)).map(v => deepCloneRule(oldRule));
         newRules.forEach((newRule,rindex) => {
-            [ newRule.lhs, newRule.rhs ].forEach(side => {
+            [ newRule.lhs, newRule.rhs ].forEach((side, sideIndex) => {
+                const mappingSet = (sideIndex === 0) ? mappingPropertySetL : mappingPropertySetR;
                 side.forEach(cellrow => {
                     cellrow.forEach(cell => {
                         for (let j = 0; j < cell.length; j += 2) {
-                            if (cell[j] != "random" && cell[j + 1] in state.propertiesDict) {
+                            if (cell[j] != "random"
+                                && cell[j + 1] in state.propertiesDict
+                                && mappingSet.has(cell[j + 1])) {
                                 cell[j + 1] = state.propertiesDict[cell[j+1]][rindex];
                             }
                         }
@@ -20281,7 +20332,7 @@ function concretizePropertyRule(state, rule, lineNumber) {
 
                             concretizePropertyInCell(newrule.lhs[j][k], property, concreteType);
                             if (newrule.rhs.length > 0) {
-                                concretizePropertyInCell(newrule.rhs[j][k], property, concreteType); //do for the corresponding rhs cell as well
+                                concretizeEquivalentPropertiesInCell(newrule.rhs[j][k], property, concreteType); //do for the corresponding rhs cell as well
                             }
 
                             if (newrule.propertyReplacement[property] === undefined) {
@@ -20324,7 +20375,7 @@ function concretizePropertyRule(state, rule, lineNumber) {
                         var cellRow_rhs = cur_rule.rhs[j];
                         for (var k = 0; k < cellRow_rhs.length; k++) {
                             var cell = cellRow_rhs[k];
-                            concretizePropertyInCell(cell, property, concreteType);
+                            concretizeEquivalentPropertiesInCell(cell, property, concreteType);
                         }
                     }
                 }
