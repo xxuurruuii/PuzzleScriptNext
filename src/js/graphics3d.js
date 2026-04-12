@@ -50,6 +50,8 @@ let cameraDistance = CAMERA_DISTANCE;
 let cameraAngleX = 1.2;
 let cameraAngleY = 0.0;
 let cameraZoomFactor = 1.0;
+let viewportWidth3D = 0;
+let viewportHeight3D = 0;
 
 // Mouse camera controls
 let isRotatingCamera = false;
@@ -120,6 +122,39 @@ function getSpriteHeightFactor() {
     return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_SPRITE_HEIGHT;
 }
 
+function get3DViewportSize(container = container3d) {
+    if (!container) return null;
+    const rect = (typeof container.getBoundingClientRect === 'function')
+        ? container.getBoundingClientRect()
+        : null;
+    const widthRaw = rect ? rect.width : (container.clientWidth || container.offsetWidth || 0);
+    const heightRaw = rect ? rect.height : (container.clientHeight || container.offsetHeight || 0);
+    const width = Math.max(0, Math.floor(widthRaw));
+    const height = Math.max(0, Math.floor(heightRaw));
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
+        return null;
+    }
+    return { width, height };
+}
+
+function sync3DViewport(force = false) {
+    if (!renderer3d || !camera3d || !container3d) return false;
+    const size = get3DViewportSize(container3d);
+    if (!size) return false;
+    if (!force && size.width === viewportWidth3D && size.height === viewportHeight3D) {
+        return true;
+    }
+    viewportWidth3D = size.width;
+    viewportHeight3D = size.height;
+    camera3d.aspect = size.width / size.height;
+    if (!Number.isFinite(camera3d.aspect) || camera3d.aspect <= 0) {
+        camera3d.aspect = 1;
+    }
+    camera3d.updateProjectionMatrix();
+    renderer3d.setSize(size.width, size.height, false);
+    return true;
+}
+
 /**
  * Initialize the Three.js renderer, scene, and camera
  */
@@ -154,8 +189,9 @@ function init3DRenderer() {
         antialias: true,
         alpha: true
     });
-    renderer3d.setPixelRatio(window.devicePixelRatio);
-    renderer3d.setSize(container.clientWidth, container.clientHeight);
+    renderer3d.setPixelRatio(Math.max(1, window.devicePixelRatio || 1));
+    const initialViewport = get3DViewportSize(container) || { width: 1, height: 1 };
+    renderer3d.setSize(initialViewport.width, initialViewport.height, false);
     renderer3d.setClearColor(0x000000, 1);
 
     // Enable high-quality VSM shadows (Variance Shadow Maps)
@@ -205,10 +241,13 @@ function init3DRenderer() {
     // Create the camera
     camera3d = new THREE.PerspectiveCamera(
         CAMERA_FOV,
-        container.clientWidth / container.clientHeight,
+        initialViewport.width / initialViewport.height,
         CAMERA_NEAR,
         CAMERA_FAR
     );
+    viewportWidth3D = 0;
+    viewportHeight3D = 0;
+    sync3DViewport(true);
     updateCameraPosition();
 
     // === THREE-POINT LIGHTING SYSTEM ===
@@ -266,11 +305,7 @@ function init3DRenderer() {
  * Handle window resize for 3D renderer
  */
 function onWindowResize3D() {
-    if (!renderer3d || !camera3d || !container3d) return;
-
-    camera3d.aspect = container3d.clientWidth / container3d.clientHeight;
-    camera3d.updateProjectionMatrix();
-    renderer3d.setSize(container3d.clientWidth, container3d.clientHeight);
+    sync3DViewport(true);
 }
 
 function clampValue(value, min, max) {
@@ -1180,6 +1215,9 @@ function redraw3D() {
         if (canvas3d) canvas3d.style.display = 'block';
     }
 
+    // Keep 3D viewport in sync with layout changes; avoid writing invalid 0x0 sizes.
+    sync3DViewport(false);
+
     // Mark all cached meshes as not in use; we'll mark them as used when we process them
     beginRedraw3D();
 
@@ -1242,7 +1280,8 @@ function redraw3D() {
     // Update camera to center on visible area
     const visibleWidth = maxi - mini;
     const visibleHeight = maxj - minj;
-    const baseCameraDistance = Math.max(visibleWidth / camera3d.aspect, visibleHeight) * state.sprite_size * CAMERA_DISTANCE;
+    const cameraAspect = (Number.isFinite(camera3d.aspect) && camera3d.aspect > 0) ? camera3d.aspect : 1;
+    const baseCameraDistance = Math.max(visibleWidth / cameraAspect, visibleHeight) * state.sprite_size * CAMERA_DISTANCE;
     cameraDistance = baseCameraDistance * cameraZoomFactor;
     updateCameraPosition();
 
