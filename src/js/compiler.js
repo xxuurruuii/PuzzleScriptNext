@@ -2012,7 +2012,13 @@ function processRuleString(rule, state, curRules) {
                 curcell = [];
             } else if (directions_only.includes(token)) {
                 if (curcell.length % 2 == 1) {
-                    logError("Error, an item can only have one direction/action at a time, but you're looking for several at once!", lineNumber);
+                    const prevDir = curcell[curcell.length - 1];
+                    if (token === 'extra' && prevDir === 'no') {
+                        // Allow "no extra X" as a qualifier form; rewritten later.
+                        curcell.push(token);
+                    } else {
+                        logError("Error, an item can only have one direction/action at a time, but you're looking for several at once!", lineNumber);
+                    }
                 } else if (!incellrow) {
                     logWarning("Invalid syntax. Directions should be placed at the start of a rule.", lineNumber);
                 } else if (late && token!=='no' && token!=='random' && token!=='randomdir' && token!=='extra') {
@@ -2281,6 +2287,21 @@ function mapExtraQualifiedName(state, ident, lineNumber) {
 function rewriteExtraBoardQualifiers(state, rule) {
     function rewriteCell(cell) {
         for (let i = 0; i < cell.length; i += 2) {
+            if (cell[i] === 'no' && cell[i + 1] === 'extra') {
+                if (i + 3 >= cell.length) {
+                    logError('The "no extra" qualifier must be followed by an object name.', rule.lineNumber);
+                    break;
+                }
+                const nextDir = cell[i + 2];
+                const nextName = cell[i + 3];
+                if (nextDir !== '' || !nextName) {
+                    logError('The "no extra" qualifier only supports the form "no extra <object>".', rule.lineNumber);
+                    continue;
+                }
+                cell[i + 1] = mapExtraQualifiedName(state, nextName, rule.lineNumber);
+                cell.splice(i + 2, 2);
+                continue;
+            }
             if (cell[i] === 'extra') {
                 cell[i] = '';
                 cell[i + 1] = mapExtraQualifiedName(state, cell[i + 1], rule.lineNumber);
