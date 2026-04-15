@@ -2741,13 +2741,26 @@ function concretizePropertyRule(state, rule, lineNumber) {
         }
     }
 
-    const canonicalOnLeft = new Set(rawMappingProperties_l.map(getBaseLegendName));
-    const canonicalOnRight = new Set(rawMappingProperties_r.map(getBaseLegendName));
-    const sharedCanonical = new Set([...canonicalOnLeft].filter(name => canonicalOnRight.has(name)));
-    const mappingProperties_l = rawMappingProperties_l.filter(p => !sharedCanonical.has(getBaseLegendName(p)));
-    const mappingProperties_r = rawMappingProperties_r.filter(p => !sharedCanonical.has(getBaseLegendName(p)));
+    const mappingProperties_l = rawMappingProperties_l.slice();
+    const mappingProperties_r = rawMappingProperties_r.slice();
     const mappingPropertySetL = new Set(mappingProperties_l);
     const mappingPropertySetR = new Set(mappingProperties_r);
+
+    const crossBoardConcretize = {};
+    for (let li = 0; li < rawMappingProperties_l.length; li++) {
+        const lp = rawMappingProperties_l[li];
+        const baseL = getBaseLegendName(lp);
+        for (let ri = 0; ri < rawMappingProperties_r.length; ri++) {
+            const rp = rawMappingProperties_r[ri];
+            if (baseL !== getBaseLegendName(rp)) {
+                continue;
+            }
+            if (lp !== rp) {
+                crossBoardConcretize[lp] = true;
+                crossBoardConcretize[rp] = true;
+            }
+        }
+    }
 
     // PS> do we have properties on both sides, all of the same length, left all different from right?
     let result = [rule];
@@ -2803,8 +2816,11 @@ function concretizePropertyRule(state, rule, lineNumber) {
                     for (var prop_n = 0; prop_n < properties.length; ++prop_n) {
                         var property = properties[prop_n];
 
+                        const twinProperty = getTwinLegendName(property);
                         if (state.propertiesSingleLayer.hasOwnProperty(property) &&
-                            ambiguousProperties[property] !== true) {
+                            ambiguousProperties[property] !== true &&
+                            crossBoardConcretize[property] !== true &&
+                            (!twinProperty || crossBoardConcretize[twinProperty] !== true)) {
                             // we don't need to explode this property
                             continue;
                         }
